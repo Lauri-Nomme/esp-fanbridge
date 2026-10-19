@@ -278,6 +278,8 @@ pub struct Slot {
     /// 0 = in, 1 = out
     pub dir: u8,
     pub power: bool,
+    /// user-facing name, empty when unset
+    pub name: Name,
 }
 
 impl Slot {
@@ -320,6 +322,7 @@ impl Config {
             speed: 0,
             dir: 0,
             power: false,
+            name: Name::EMPTY,
         }; 8],
         checksum: 0,
     };
@@ -336,6 +339,7 @@ impl Config {
             b[o + 5] = s.dir;
             b[o + 6] = u8::from(s.power);
             b[o + 7] = 0;
+            s.name.write(&mut b[o + 8..][..NAME_MAX]);
         }
         b[CHECKSUM_OFF..CHECKSUM_OFF + 4].copy_from_slice(&self.checksum.to_le_bytes());
         b
@@ -372,6 +376,9 @@ impl Config {
             s.speed = b[o + 4];
             s.dir = b[o + 5];
             s.power = b[o + 6] != 0;
+            if version >= 2 {
+                s.name = Name::read(&b[o + 8..][..NAME_MAX]);
+            }
         }
 
         let stored = u32::from_le_bytes([
@@ -738,14 +745,39 @@ fn cmd_str(line: &[u8; 64]) -> &str {
     core::str::from_utf8(&line[..end]).unwrap_or("")
 }
 
+/// Copy a name out of the shared state (a `&str` can not escape the lock).
+fn copy_name(name: Name) -> [u8; NAME_MAX] {
+    let mut buf = [0u8; NAME_MAX];
+    let bytes = name.as_str().as_bytes();
+    buf[..bytes.len()].copy_from_slice(bytes);
+    buf
+}
+
+fn fmt_name<'a>(b: &'a mut [u8; 96], text: &[u8; NAME_MAX], slot: Option<usize>) -> &'a str {
+    let text = core::str::from_utf8(&text[..text.iter().position(|&c| c == 0).unwrap_or(NAME_MAX)]).unwrap_or("");
+    let pos = {
+        let mut w = Writer96 { buf: b, pos: 0 };
+        match slot {
+            Some(i) => {
+                let _ = core::fmt::Write::write_fmt(&mut w, format_args!("fan {i} name: \"{text}\""));
+            }
+            None => {
+                let _ = core::fmt::Write::write_fmt(&mut w, format_args!("device name: \"{text}\""));
+            }
+        }
+        w.pos
+    };
+    core::str::from_utf8(&b[..pos]).unwrap_or("")
+}
+
 fn print_list(c: &mut Console<'_>) {
     STATE.lock(|s| {
         let st = s.borrow();
-        c.outln("slot  address    speed  dir    power");
+        c.outln("slot  address    speed  dir    power  name");
         for i in 0..8 {
             let sl = &st.cfg.slots[i];
             if sl.used() {
-                let mut b = [0u8; 64];
+                let mut b = [0u8; 96];
                 let txt = format_slot(&mut b, i, sl);
                 c.outln(txt);
             }
@@ -771,17 +803,18 @@ impl core::fmt::Write for Writer<'_> {
     }
 }
 
-fn format_slot<'a>(b: &'a mut [u8; 64], i: usize, sl: &Slot) -> &'a str {
+fn format_slot<'a>(b: &'a mut [u8; 96], i: usize, sl: &Slot) -> &'a str {
     use core::fmt::Write;
-    let mut w = Writer { buf: b, pos: 0 };
+    let mut w = Writer96 { buf: b, pos: 0 };
     let _ = write!(
         w,
-        "  {}   0x{:05X}    {}     {}     {}",
+        "  {}   0x{:05X}    {}     {}     {}    {}",
         i,
         sl.addr,
         sl.speed,
         if sl.dir == 0 { "in" } else { "out" },
-        if sl.power { "on" } else { "off" }
+        if sl.power { "on" } else { "off" },
+        sl.name.as_str()
     );
     let n = w.pos;
     core::str::from_utf8(&b[..n]).unwrap_or("")
@@ -807,6 +840,7 @@ fn handle_command(c: &mut Console<'_>, line: &str) {
             c.outln("  clock                toggle GDO0 = XOSC/192 clock (pin self-test)");
             c.outln("  save                 force save config");
             c.outln("  name [text]          show or set the device name");
+            c.outln("  name <slot> [text]   show or set a fan name");
         }
         "list" => print_list(c),
         "pair" => {
@@ -939,33 +973,50 @@ fn handle_command(c: &mut Console<'_>, line: &str) {
             c.outln(if ok { "saved" } else { "save failed" });
         }
         "name" => {
+            // `name` -> device name, `name <slot> [text]` -> fan name
             let rest = line[cmd.len()..].trim();
+            let (first, tail) = match rest.split_once(char::is_whitespace) {
+                Some((a, b)) => (a, b.trim()),
+                None => (rest, ""),
+            };
+            let slot = first.parse::<usize>().ok().filter(|s| *s < 8);
+
             if rest.is_empty() {
-                let mut name = [0u8; NAME_MAX];
-                let len = STATE.lock(|s| {
-                    let st = s.borrow();
-                    let bytes = st.cfg.device_name.as_str().as_bytes();
-                    name[..bytes.len()].copy_from_slice(bytes);
-                    bytes.len()
-                });
-                let text = core::str::from_utf8(&name[..len]).unwrap_or("");
-                let mut b = [0u8; 80];
-                let pos = {
-                    let mut w = Writer80 { buf: &mut b, pos: 0 };
-                    let _ = core::fmt::Write::write_fmt(&mut w, format_args!("device name: \"{text}\""));
-                    w.pos
-                };
-                let t = core::str::from_utf8(&b[..pos]).unwrap_or("");
-                c.outln(t);
+                let text = copy_name(STATE.lock(|s| s.borrow().cfg.device_name));
+                c.outln(&fmt_name(&mut [0u8; 96], &text, None));
+            } else if let Some(slot) = slot {
+                if tail.is_empty() {
+                    let text = copy_name(STATE.lock(|s| s.borrow().cfg.slots[slot].name));
+                    c.outln(&fmt_name(&mut [0u8; 96], &text, Some(slot)));
+                } else {
+                    let ok = STATE.lock(|s| {
+                        let mut st = s.borrow_mut();
+                        if st.cfg.slots[slot].name.set(tail) {
+                            save_config(&st.cfg)
+                        } else {
+                            false
+                        }
+                    });
+                    c.outln(if ok {
+                        "fan name saved"
+                    } else {
+                        "name too long (max 24 bytes) or save failed"
+                    });
+                }
             } else {
                 let ok = STATE.lock(|s| {
                     let mut st = s.borrow_mut();
-                    if !st.cfg.device_name.set(rest) {
-                        return false;
+                    if st.cfg.device_name.set(rest) {
+                        save_config(&st.cfg)
+                    } else {
+                        false
                     }
-                    save_config(&st.cfg)
                 });
-                c.outln(if ok { "device name saved" } else { "name too long (max 24 bytes) or save failed" });
+                c.outln(if ok {
+                    "device name saved"
+                } else {
+                    "name too long (max 24 bytes) or save failed"
+                });
             }
         }
         "" => {}
@@ -1015,11 +1066,13 @@ fn on_frame(addr: u32, button: u8, now_ms: u64) -> Ev {
                     let free = st.cfg.slots.iter().position(|s| !s.used());
                     let slot = existing.or(free);
                     if let Some(i) = slot {
+                        let name = st.cfg.slots[i].name;
                         st.cfg.slots[i] = Slot {
                             addr,
                             speed: 0,
                             dir: 0,
                             power: false,
+                            name,
                         };
                         save_config(&st.cfg);
                         st.pairing = false;
@@ -1067,6 +1120,22 @@ fn fmt2<'a>(b: &'a mut [u8; 80], a: u32, x: u32) -> &'a str {
     let _ = write!(w, "paired remote 0x{a:05X} into slot {x}");
     let n = w.pos;
     core::str::from_utf8(&b[..n]).unwrap_or("")
+}
+
+struct Writer96<'a> {
+    buf: &'a mut [u8; 96],
+    pos: usize,
+}
+impl core::fmt::Write for Writer96<'_> {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        for &c in s.as_bytes() {
+            if self.pos < 96 {
+                self.buf[self.pos] = c;
+                self.pos += 1;
+            }
+        }
+        Ok(())
+    }
 }
 
 struct Writer80<'a> {

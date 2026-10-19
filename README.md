@@ -38,7 +38,7 @@ sudo minicom -D /dev/ttyACM0 -b 115200      # Ctrl-A W to wrap, Ctrl-A X to exit
 
 | Command | What it does |
 |---|---|
-| `list` | show paired remotes (slot, address, speed, direction, power) |
+| `list` | show paired remotes (slot, address, speed, direction, power, name) |
 | `pair` | learn a new remote: press **speed 1 → 2 → 3 → 4** on it |
 | `cancel` | abort pairing |
 | `del <slot>` | forget a remote |
@@ -47,6 +47,7 @@ sudo minicom -D /dev/ttyACM0 -b 115200      # Ctrl-A W to wrap, Ctrl-A X to exit
 | `power <slot> <on\|off>` | transmit power |
 | `raw <hex>` | transmit an arbitrary 24-bit code |
 | `name [text]` | show or set the device name (stored in flash) |
+| `name <slot> [text]` | show or set a fan's name |
 | `save` | force a config save |
 | `stat` | chip state: MARCSTATE, RSSI, IOCFG0/PKTCTRL0/MDMCFG2, captured segments, raw edge count, GDO0 level |
 | `dump` | the last captured edge timings |
