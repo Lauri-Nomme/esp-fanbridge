@@ -1228,8 +1228,8 @@ const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "+", env!("FANBRIDGE_GI
 /// Build date, `YYYYMMDD`, reported as `DateCode`.
 const BUILD_DATE: &str = env!("FANBRIDGE_DATE");
 
-const VENDOR: &str = "zigbee-rs";
-const MODEL_MASTER: &str = "fan-bridge";
+const VENDOR: &str = "locals.tf";
+const MODEL_MASTER: &str = "esp-fanbridge";
 
 /// `DateCode` (ZCL 3.2.2.2.8) and `SWBuildID` (ZCL 3.2.2.2.12) are not in the
 /// minimal set the stack's `BasicServer` exposes, but they are what consumers
