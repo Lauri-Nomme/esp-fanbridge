@@ -16,6 +16,9 @@ const utils = require('zigbee-herdsman-converters/lib/utils');
 
 const ea = exposes.access;
 
+/** ZCL fanMode names for speed 1..4 (the fourth speed is ZCL `on`). */
+const SPEEDS = ['low', 'medium', 'high', 'on'];
+
 const PAIRING_STAGES = [
     'idle',
     'waiting_speed_1',
@@ -65,20 +68,26 @@ module.exports = {
             result.push(new exposes.Switch().withState('state').withEndpoint(String(endpoint)));
         }
         for (const endpoint of fanEndpoints(device)) {
-            result.push(exposes.presets.fan().withState('state').withModes(Object.keys(constants.fanMode)).withEndpoint(String(endpoint)));
+            // Four discrete speeds (the remote's speed 1..4), exposed as the fan
+            // percentage so Home Assistant offers four steps instead of three
+            // modes plus an unrelated "on" preset.
+            result.push(exposes.presets.fan().withState('state').withSpeed(1, 4).withEndpoint(String(endpoint)));
         }
         return result;
     },
     fromZigbee: [
         {
+            // fanMode carries both the on/off state and the speed: `off` means
+            // stopped, `low`..`on` are the remote's speed 1..4.
             cluster: 'hvacFanCtrl',
             type: ['attributeReport', 'readResponse'],
             convert: (model, msg, publish, options, meta) => {
                 if (msg.data.fanMode === undefined) return;
                 const mode = utils.getKey(constants.fanMode, msg.data.fanMode);
+                const speed = SPEEDS.indexOf(mode) + 1; // 0 when not a speed
                 return {
-                    [utils.postfixWithEndpointName('fan_mode', msg, model, meta)]: mode,
-                    [utils.postfixWithEndpointName('state', msg, model, meta)]: mode === 'off' ? 'OFF' : 'ON',
+                    [utils.postfixWithEndpointName('state', msg, model, meta)]: speed === 0 ? 'OFF' : 'ON',
+                    [utils.postfixWithEndpointName('speed', msg, model, meta)]: speed,
                 };
             },
         },
@@ -94,16 +103,37 @@ module.exports = {
             },
         },
     ],
-    toZigbee: [tz.fan_mode, tz.on_off],
-    onEvent: [
-        async (event) => {
-            // Register as early as possible: the cluster has to be known before
-            // the first report from it can be parsed into named attributes.
-            if (event.type === 'start' || event.type === 'deviceInterview' || event.type === 'deviceJoined') {
-                event.data.device.addCustomCluster('espPairing', PAIRING_CLUSTER);
-            }
+    toZigbee: [
+        {
+            key: ['state', 'speed'],
+            convertSet: async (entity, key, value, meta) => {
+                // Zigbee2MQTT adds the endpoint suffix itself, so return the
+                // plain property names here.
+                const speedProperty = utils.postfixWithEndpointName('speed', {endpoint: entity}, meta.mapped, meta);
+                if (key === 'state' && value === 'OFF') {
+                    await entity.write('hvacFanCtrl', {fanMode: constants.fanMode.off});
+                    return {state: {state: 'OFF', speed: 0}};
+                }
+                // turning on keeps the speed the fan had, low if there was none
+                const speed = key === 'speed' ? Math.min(Math.max(Number(value), 1), SPEEDS.length) : meta.state?.[speedProperty] || 1;
+                await entity.write('hvacFanCtrl', {fanMode: constants.fanMode[SPEEDS[speed - 1]]});
+                return {state: {state: 'ON', speed}};
+            },
+            convertGet: async (entity) => {
+                if (entity.supportsInputCluster('hvacFanCtrl')) {
+                    await entity.read('hvacFanCtrl', ['fanMode']);
+                }
+            },
         },
+        tz.on_off,
     ],
+    // Zigbee2MQTT calls `definition.onEvent` as a plain function; register the
+    // cluster as early as possible so the first report can be parsed.
+    onEvent: async (event) => {
+        if (event.type === 'start' || event.type === 'deviceInterview' || event.type === 'deviceJoined') {
+            event.data.device.addCustomCluster('espPairing', PAIRING_CLUSTER);
+        }
+    },
     configure: async (device) => {
         device.addCustomCluster('espPairing', PAIRING_CLUSTER);
         // The firmware reports on change to the coordinator, so no binding is
