@@ -39,6 +39,7 @@ sudo minicom -D /dev/ttyACM0 -b 115200      # Ctrl-A W to wrap, Ctrl-A X to exit
 | Command | What it does |
 |---|---|
 | `list` | show paired remotes (slot, address, speed, direction, power, name) |
+| `slots` | raw dump of all eight slots + the paired count (also shows empty ones) |
 | `pair` | learn a new remote: press **speed 1 → 2 → 3 → 4** on it |
 | `cancel` | abort pairing |
 | `del <slot>` | forget a remote |
@@ -87,12 +88,34 @@ switch endpoints, and adds:
 | `switch.…_1` | pairing mode: on starts learning, off cancels |
 | `sensor.…_pairing_stage` | `idle`, `waiting_speed_1`..`waiting_speed_4`, `paired`, `failed` |
 | `sensor.…_paired_count` | how many remotes are stored |
+| `sensor.…_exposed_count` | how many of them currently have a Zigbee endpoint |
+| `binary_sensor.…_restart_required` | on when a pair/delete is waiting for a restart + re-interview |
 | `fan.…_<endpoint>` | the remote's fan: four speeds, on/off |
 | `select.…_direction_<endpoint>` | `in`, `out` or `auto` (the fan alternates by itself) |
 
 The stage is reported by the device as soon as it changes (including the
 `paired`/`failed` result, which stays visible for 10 seconds), so the user gets
 feedback while pressing the four speed buttons on the remote.
+
+## Debugging
+
+Every command that arrives over Zigbee is printed on the console, with the slot
+it controls, so it is visible what Home Assistant actually did:
+
+```
+zb: slot 0 "lr-r" speed -> 3
+zb: slot 0 "lr-r" direction -> in
+zb: slot 0 "lr-r" power -> off
+zb: pairing -> on
+```
+
+`slots` complements `list`: it prints all eight slots with their raw address and
+the `used` flag, which makes a slot that exists but has no endpoint obvious.
+
+If `paired_count` and `exposed_count` differ, a remote was paired or deleted
+since the last boot: the endpoint set is fixed at boot, so restart (`reboot`) and
+re-interview the device in Zigbee2MQTT. The `restart_required` binary sensor
+shows exactly that state in Home Assistant.
 
 ## Diagnostics cheat-sheet
 
@@ -103,6 +126,11 @@ feedback while pressing the four speed buttons on the remote.
 | `segs>0`, no `rx` line | hearing something, but it doesn't pass the frame validator (→ `junk:` lines) |
 | `rx device=… button=…` | a valid frame decoded |
 | `iocfg0≠0x0d` | GDO0 is not in serial-data mode (the `clock` self-test must be turned off) |
+
+If `espflash` fails with a panic (`range end index ... out of range`) after an
+interrupted flash, the board is wedged and ignores the reset lines; re-enumerate
+it with `echo 0 > /sys/bus/usb/devices/<bus-port>/authorized` followed by `1`
+(or unplug/replug it) and flash again.
 
 A healthy baseline here had RSSI around **−74 dBm**; after the reception degraded
 it sat at **−81 dBm** with a static GDO0. Check the SMA antenna first.

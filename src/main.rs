@@ -24,6 +24,7 @@ use core::sync::atomic::Ordering;
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex as CsMutex;
+use embassy_sync::channel::Channel;
 use embassy_time::Delay as AsyncDelay;
 use embassy_time::Timer;
 use esp_alloc as _;
@@ -506,6 +507,16 @@ impl State {
     pub fn paired_count(&self) -> u8 {
         self.cfg.slots.iter().filter(|s| s.used()).count() as u8
     }
+
+    /// Remotes that currently have an endpoint (the set is fixed at boot).
+    pub fn exposed_count(&self) -> u8 {
+        advertised().len().saturating_sub(1) as u8
+    }
+
+    /// Whether a pairing change is waiting for a restart to become visible.
+    pub fn restart_required(&self) -> bool {
+        self.paired_count() != self.exposed_count()
+    }
 }
 
 static STATE: CsMutex<CriticalSectionRawMutex, RefCell<State>> =
@@ -525,10 +536,29 @@ static TX_REQ: AtomicU32 = AtomicU32::new(0);
 static DUMP_REQ: AtomicBool = AtomicBool::new(false);
 static STAT_REQ: AtomicBool = AtomicBool::new(false);
 static CLOCK_REQ: AtomicBool = AtomicBool::new(false);
+/// Commands that arrived over Zigbee, drained and printed by the main loop (the
+/// cluster handlers run inside the stack and cannot write to the console).
+#[derive(Clone, Copy)]
+pub struct ZbEvent {
+    /// 0 = speed, 1 = power, 2 = direction, 3 = pairing
+    pub kind: u8,
+    /// slot index, or 0xFF when the command is not about a slot
+    pub slot: u8,
+    pub value: u8,
+}
+
+static ZB_EVENTS: Channel<CriticalSectionRawMutex, ZbEvent, 16> = Channel::new();
+
+fn zb_event(kind: u8, slot: u8, value: u8) {
+    let _ = ZB_EVENTS.try_send(ZbEvent { kind, slot, value });
+}
+
 /// Set when the pairing status needs to be reported to the coordinator.
 static PAIRING_REPORT: AtomicBool = AtomicBool::new(false);
 /// Paired count last reported, to notice a change.
 static PAIRED_NOW: AtomicU32 = AtomicU32::new(0);
+/// Exposed (endpoint-bearing) count last reported.
+static EXPOSED_NOW: AtomicU32 = AtomicU32::new(0);
 /// opt-in noisy diagnostics
 static DEBUG_ON: AtomicBool = AtomicBool::new(false);
 /// counts every raw level change on GDO0, including sub-noise glitches
@@ -1070,6 +1100,44 @@ fn handle_command(c: &mut Console<'_>, line: &str) {
                 c.outln(t);
             }
         }
+        "slots" => {
+            // raw view: unlike `list` this also shows empty slots, which makes a
+            // phantom entry (address left behind, count mismatch) visible
+            let (count, raw) = STATE.lock(|s| {
+                let st = s.borrow();
+                let mut raw = [(0u32, 0u8, 0u8, false, Name::EMPTY); 8];
+                for (i, sl) in st.cfg.slots.iter().enumerate() {
+                    raw[i] = (sl.addr, sl.speed, sl.dir, sl.power, sl.name);
+                }
+                (st.paired_count(), raw)
+            });
+            for (i, (addr, speed, dir, power, name)) in raw.iter().enumerate() {
+                let mut b = [0u8; 96];
+                let pos = {
+                    let mut w = Writer96 { buf: &mut b, pos: 0 };
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut w,
+                        format_args!(
+                            "slot {i}: addr=0x{addr:05X} used={} speed={speed} dir={} power={} name=\"{}\"",
+                            u8::from(*addr != 0),
+                            dir_name(*dir),
+                            u8::from(*power),
+                            name.as_str()
+                        ),
+                    );
+                    w.pos
+                };
+                let t = core::str::from_utf8(&b[..pos]).unwrap_or("");
+                c.outln(t);
+            }
+            let mut b = [0u8; 64];
+            let pos = {
+                let mut w = Writer { buf: &mut b, pos: 0 };
+                let _ = core::fmt::Write::write_fmt(&mut w, format_args!("paired_count={count}"));
+                w.pos
+            };
+            c.outln(core::str::from_utf8(&b[..pos]).unwrap_or(""));
+        }
         "reboot" => {
             c.outln("rebooting...");
             esp_hal::system::software_reset();
@@ -1130,6 +1198,46 @@ fn fmt_rx<'a>(b: &'a mut [u8; 80], addr: u32, button: u8, code: u32) -> &'a str 
     use core::fmt::Write;
     let mut w = Writer80 { buf: b, pos: 0 };
     let _ = write!(w, "rx device=0x{addr:05X} button=0x{button:X} code=0x{code:06X}");
+    let n = w.pos;
+    core::str::from_utf8(&b[..n]).unwrap_or("")
+}
+
+/// Render a command that arrived over Zigbee, naming the slot it controls.
+fn fmt_zb_event<'a>(b: &'a mut [u8; 80], ev: ZbEvent) -> &'a str {
+    use core::fmt::Write;
+    let (slot_name, slot_index) = STATE.lock(|s| {
+        let st = s.borrow();
+        if ev.slot == 0xFF {
+            (Name::EMPTY, 0)
+        } else {
+            (st.cfg.slots[ev.slot as usize].name, ev.slot)
+        }
+    });
+    let mut w = Writer80 { buf: b, pos: 0 };
+    if ev.slot == 0xFF {
+        let _ = write!(w, "zb: pairing -> {}", if ev.value != 0 { "on" } else { "off" });
+    } else {
+        let _ = write!(w, "zb: slot {slot_index}");
+        if !slot_name.is_empty() {
+            let _ = write!(w, " \"{}\"", slot_name.as_str());
+        }
+        match ev.kind {
+            0 => match ev.value {
+                0 => {
+                    let _ = write!(w, " speed -> off");
+                }
+                speed => {
+                    let _ = write!(w, " speed -> {speed}");
+                }
+            },
+            1 => {
+                let _ = write!(w, " power -> {}", if ev.value != 0 { "on" } else { "off" });
+            }
+            _ => {
+                let _ = write!(w, " direction -> {}", dir_name(ev.value));
+            }
+        }
+    }
     let n = w.pos;
     core::str::from_utf8(&b[..n]).unwrap_or("")
 }
@@ -1291,12 +1399,21 @@ const A_PAIRED_COUNT: Attribute<Uint8, ReadOnly, Reportable> =
     CL_PAIRING.attribute(AttributeId(0x0001), "pairedCount");
 const A_DIRECTION: Attribute<Enum8<Direction>, ReadWrite, Reportable> =
     CL_DIRECTION.attribute(AttributeId(0x0000), "direction");
+const A_EXPOSED_COUNT: Attribute<Uint8, ReadOnly, Reportable> =
+    CL_PAIRING.attribute(AttributeId(0x0002), "exposedCount");
+const A_RESTART_REQUIRED: Attribute<Bool, ReadOnly, Reportable> =
+    CL_PAIRING.attribute(AttributeId(0x0003), "restartRequired");
 static ONOFF_ATTRS: [AttrInfo; 1] = [A_ONOFF.attr_info()];
 /// Shared reporting store: enough to accept Configure Reporting from the coordinator.
 static REPORTING: ReportingTable<16> = ReportingTable::new();
 static LEVEL_ATTRS: [AttrInfo; 1] = [A_LEVEL.attr_info()];
 static FAN_ATTRS: [AttrInfo; 1] = [A_FANMODE.attr_info()];
-static PAIRING_ATTRS: [AttrInfo; 2] = [A_STAGE.attr_info(), A_PAIRED_COUNT.attr_info()];
+static PAIRING_ATTRS: [AttrInfo; 4] = [
+    A_STAGE.attr_info(),
+    A_PAIRED_COUNT.attr_info(),
+    A_EXPOSED_COUNT.attr_info(),
+    A_RESTART_REQUIRED.attr_info(),
+];
 static DIRECTION_ATTRS: [AttrInfo; 1] = [A_DIRECTION.attr_info()];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1518,6 +1635,10 @@ impl<const EP: u8, const SLOT: i8, const KIND: u8> OnOffEp<EP, SLOT, KIND> {
                 }
             }
         }
+        match KIND {
+            0 => zb_event(1, SLOT.max(0) as u8, u8::from(on)),
+            _ => zb_event(3, 0xFF, u8::from(on)),
+        }
     }
 }
 
@@ -1636,6 +1757,7 @@ impl<const SLOT: usize> FanEp<SLOT> {
         if code != 0 {
             TX_REQ.store(code | 0x8000_0000, Ordering::Relaxed);
         }
+        zb_event(0, SLOT as u8, speed);
     }
 }
 
@@ -1653,11 +1775,17 @@ impl ClusterServer for PairingEp {
         Some(&REPORTING)
     }
     fn encode_value(&self, id: AttributeId, out: &mut [u8], offset: &mut usize) -> Status {
-        let count = STATE.lock(|s| s.borrow().paired_count());
+        let (count, exposed, restart) = STATE.lock(|s| {
+            let st = s.borrow();
+            let (count, exposed) = (st.paired_count(), st.exposed_count());
+            (count, exposed, count != exposed)
+        });
         let stage = Stage::from_raw(STAGE_NOW.load(Ordering::Relaxed) as u8).unwrap_or(Stage::Idle);
         ok(match id.0 {
             0x0000 => A_STAGE.encode(stage, out, offset),
             0x0001 => A_PAIRED_COUNT.encode(Uint8(count), out, offset),
+            0x0002 => A_EXPOSED_COUNT.encode(Uint8(exposed), out, offset),
+            0x0003 => A_RESTART_REQUIRED.encode(restart, out, offset),
             _ => return Status::UnsupportedAttribute,
         })
     }
@@ -1726,6 +1854,7 @@ impl<const SLOT: usize> DirEp<SLOT> {
         if code != 0 {
             TX_REQ.store(code | 0x8000_0000, Ordering::Relaxed);
         }
+        zb_event(2, SLOT as u8, dir.as_u8());
     }
 }
 
@@ -2047,21 +2176,29 @@ async fn stack_task(stack: &'static ZbStack) {
 }
 
 /// Send the pairing stage + paired count to the coordinator.
-async fn send_pairing_report(stack: &ZbStack) {
+///
+/// Returns whether it was accepted, so a failed attempt can be retried instead
+/// of leaving the coordinator with a stale value forever.
+async fn send_pairing_report(stack: &ZbStack) -> bool {
     use core::sync::atomic::AtomicU8;
     static SEQ: AtomicU8 = AtomicU8::new(0);
     let seq = SEQ.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
     let stage = Stage::from_raw(STAGE_NOW.load(Ordering::Relaxed) as u8).unwrap_or(Stage::Idle);
-    let count = PAIRED_NOW.load(Ordering::Relaxed) as u8;
+    let (count, exposed) = STATE.lock(|s| {
+        let st = s.borrow();
+        (st.paired_count(), st.exposed_count())
+    });
     let mut buf = [0u8; 32];
     let Ok(report) = AttributeReportBuilder::new(&mut buf, seq)
         .and_then(|b| b.push(&A_STAGE, stage))
         .and_then(|b| b.push(&A_PAIRED_COUNT, Uint8(count)))
+        .and_then(|b| b.push(&A_EXPOSED_COUNT, Uint8(exposed)))
+        .and_then(|b| b.push(&A_RESTART_REQUIRED, count != exposed))
         .and_then(AttributeReportBuilder::finish)
     else {
-        return;
+        return false;
     };
-    let _ = stack
+    matches!(stack
         .device()
         .send_attribute_report(
             ZclReportTarget {
@@ -2073,7 +2210,9 @@ async fn send_pairing_report(stack: &ZbStack) {
             report,
             &mut AsyncDelay,
         )
-        .await;
+        .await,
+        Ok(confirm) if confirm.status == zigbee::aps::apsde::ApsdeSapConfirmStatus::Success
+    )
 }
 
 // ----------------------------------------------------------------------- main
@@ -2141,6 +2280,7 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
     let mut last_code: Option<u32> = None;
     let mut last_ms: u64 = 0;
     let mut led_blink = 0u32;
+    let mut last_report_ms: u64 = 0;
     let mut linebuf = [0u8; 80];
     let mut clock_on = false;
     let mut raw_prev = gdo0.is_high();
@@ -2153,21 +2293,40 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
         }
 
         // ---- pairing status: publish it when it changes
+        let now_ms = t0.elapsed().as_millis();
         {
-            let now = t0.elapsed().as_millis();
-            let (stage, count) = STATE.lock(|s| {
+            let (stage, count, exposed) = STATE.lock(|s| {
                 let st = s.borrow();
-                (st.stage_at(now), u32::from(st.paired_count()))
+                (
+                    st.stage_at(now_ms),
+                    u32::from(st.paired_count()),
+                    u32::from(st.exposed_count()),
+                )
             });
             let raw = u32::from(stage.into_raw());
-            if STAGE_NOW.load(Ordering::Relaxed) != raw || PAIRED_NOW.load(Ordering::Relaxed) != count {
+            // `exposed` only changes after a reboot, but the pairing status is
+            // what tells the user a restart is pending
+            if STAGE_NOW.load(Ordering::Relaxed) != raw
+                || PAIRED_NOW.load(Ordering::Relaxed) != count
+                || EXPOSED_NOW.load(Ordering::Relaxed) != exposed
+            {
                 STAGE_NOW.store(raw, Ordering::Relaxed);
                 PAIRED_NOW.store(count, Ordering::Relaxed);
+                EXPOSED_NOW.store(exposed, Ordering::Relaxed);
                 PAIRING_REPORT.store(true, Ordering::Relaxed);
             }
         }
-        if PAIRING_REPORT.swap(false, Ordering::Relaxed) {
-            send_pairing_report(stack).await;
+        if PAIRING_REPORT.load(Ordering::Relaxed) && now_ms.saturating_sub(last_report_ms) > 2_000 {
+            last_report_ms = now_ms;
+            if send_pairing_report(stack).await {
+                PAIRING_REPORT.store(false, Ordering::Relaxed);
+            }
+        }
+
+        // ---- commands received over Zigbee
+        while let Ok(ev) = ZB_EVENTS.try_receive() {
+            let text = fmt_zb_event(&mut linebuf, ev);
+            console.outln(text);
         }
 
         // ---- pending transmit
