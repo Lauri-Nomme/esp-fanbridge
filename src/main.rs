@@ -61,7 +61,6 @@ use zigbee::TimingConfig;
 use zigbee::CurrentPowerMode;
 use zigbee::CurrentPowerSourceLevel;
 use zigbee_cluster_library::clusters::general::basic;
-use zigbee_cluster_library::clusters::general::basic::BasicServer;
 use zigbee_cluster_library::clusters::general::identify;
 use zigbee_cluster_library::clusters::general::identify::IdentifyServer;
 use zigbee_cluster_library::frame::Status;
@@ -84,6 +83,8 @@ use zigbee_cluster_library::types::TypeId;
 use zigbee_cluster_library::types::Uint8;
 use zigbee_cluster_library::types::Enum8;
 use zigbee_cluster_library::types::ZclEnum8;
+use zigbee_cluster_library::types::strings::ShortStr;
+use zigbee_cluster_library::types::strings::ShortText;
 use zigbee_types::IeeeAddress;
 
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -1221,29 +1222,130 @@ impl<const SLOT: usize> ClusterRequestHandler for FanEp<SLOT> {
     }
 }
 
-// ---- identity per endpoint
-macro_rules! basic_for {
-    ($name:ident, $model:literal) => {
-        pub static $name: BasicServer<'static> = BasicServer {
-            zcl_version: 8,
-            application_version: 1,
-            stack_version: 0,
-            hw_version: 1,
-            manufacturer_name: "zigbee-rs",
-            model_identifier: $model,
-            power_source: 0x01,
-        };
-    };
+// ---- identity
+/// What this build is. Printed on boot and reported as `SWBuildID`.
+const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "+", env!("FANBRIDGE_GIT"));
+/// Build date, `YYYYMMDD`, reported as `DateCode`.
+const BUILD_DATE: &str = env!("FANBRIDGE_DATE");
+
+const VENDOR: &str = "zigbee-rs";
+const MODEL_MASTER: &str = "fan-bridge";
+
+/// `DateCode` (ZCL 3.2.2.2.8) and `SWBuildID` (ZCL 3.2.2.2.12) are not in the
+/// minimal set the stack's `BasicServer` exposes, but they are what consumers
+/// show as the firmware/software version.
+const A_DATE_CODE: Attribute<ShortText, ReadOnly> =
+    basic::CLUSTER.attribute(AttributeId(0x0006), "DateCode");
+const A_SW_BUILD_ID: Attribute<ShortText, ReadOnly> =
+    basic::CLUSTER.attribute(AttributeId(0x4000), "SWBuildID");
+
+static BASIC_ATTRS: [AttrInfo; 9] = [
+    basic::ZCL_VERSION.attr_info(),
+    basic::APPLICATION_VERSION.attr_info(),
+    basic::STACK_VERSION.attr_info(),
+    basic::HW_VERSION.attr_info(),
+    basic::MANUFACTURER_NAME.attr_info(),
+    basic::MODEL_IDENTIFIER.attr_info(),
+    A_DATE_CODE.attr_info(),
+    basic::POWER_SOURCE.attr_info(),
+    A_SW_BUILD_ID.attr_info(),
+];
+
+/// `Basic` server with a build identity on top of the mandatory attributes.
+pub struct Basic {
+    /// Endpoint this identity belongs to.
+    pub ep: u8,
+    pub manufacturer: &'static str,
+    pub model: &'static str,
 }
-basic_for!(BASIC_MASTER, "fan-bridge");
-basic_for!(BASIC_F0, "fan-1");
-basic_for!(BASIC_F1, "fan-2");
-basic_for!(BASIC_F2, "fan-3");
-basic_for!(BASIC_F3, "fan-4");
-basic_for!(BASIC_F4, "fan-5");
-basic_for!(BASIC_F5, "fan-6");
-basic_for!(BASIC_F6, "fan-7");
-basic_for!(BASIC_F7, "fan-8");
+
+/// Encode a `CharacterString` attribute, or bail out if it does not fit.
+macro_rules! text_attr {
+    ($attr:expr, $text:expr, $out:expr, $off:expr) => {{
+        let Some(value) = ShortStr::new($text) else {
+            return Status::InvalidValue;
+        };
+        $attr.encode(value, $out, $off)
+    }};
+}
+
+impl ClusterRequestHandler for Basic {
+    fn handle(&self, r: &ClusterRequest<'_>, out: &mut [u8]) -> Option<ClusterReply> {
+        if r.dst_endpoint != self.ep {
+            return None;
+        }
+        self.handle_request(r, out)
+    }
+}
+
+impl ClusterServer for Basic {
+    fn cluster(&self) -> Cluster {
+        basic::CLUSTER
+    }
+    fn attributes(&self) -> &'static [AttrInfo] {
+        &BASIC_ATTRS
+    }
+    fn encode_value(&self, id: AttributeId, out: &mut [u8], offset: &mut usize) -> Status {
+        ok(match id.0 {
+            0x0000 => basic::ZCL_VERSION.encode(Uint8(8), out, offset),
+            0x0001 => basic::APPLICATION_VERSION.encode(Uint8(1), out, offset),
+            0x0002 => basic::STACK_VERSION.encode(Uint8(0), out, offset),
+            0x0003 => basic::HW_VERSION.encode(Uint8(1), out, offset),
+            0x0004 => text_attr!(basic::MANUFACTURER_NAME, self.manufacturer, out, offset),
+            0x0005 => text_attr!(basic::MODEL_IDENTIFIER, self.model, out, offset),
+            0x0006 => text_attr!(A_DATE_CODE, BUILD_DATE, out, offset),
+            0x0007 => basic::POWER_SOURCE.encode(basic::PowerSource(0x01), out, offset),
+            0x4000 => text_attr!(A_SW_BUILD_ID, VERSION, out, offset),
+            _ => return Status::UnsupportedAttribute,
+        })
+    }
+}
+
+pub static BASIC_MASTER: Basic = Basic {
+    ep: EP_MASTER,
+    manufacturer: VENDOR,
+    model: MODEL_MASTER,
+};
+pub static BASIC_F0: Basic = Basic {
+    ep: EP_FAN0 + 0,
+    manufacturer: VENDOR,
+    model: "fan-1",
+};
+pub static BASIC_F1: Basic = Basic {
+    ep: EP_FAN0 + 1,
+    manufacturer: VENDOR,
+    model: "fan-2",
+};
+pub static BASIC_F2: Basic = Basic {
+    ep: EP_FAN0 + 2,
+    manufacturer: VENDOR,
+    model: "fan-3",
+};
+pub static BASIC_F3: Basic = Basic {
+    ep: EP_FAN0 + 3,
+    manufacturer: VENDOR,
+    model: "fan-4",
+};
+pub static BASIC_F4: Basic = Basic {
+    ep: EP_FAN0 + 4,
+    manufacturer: VENDOR,
+    model: "fan-5",
+};
+pub static BASIC_F5: Basic = Basic {
+    ep: EP_FAN0 + 5,
+    manufacturer: VENDOR,
+    model: "fan-6",
+};
+pub static BASIC_F6: Basic = Basic {
+    ep: EP_FAN0 + 6,
+    manufacturer: VENDOR,
+    model: "fan-7",
+};
+pub static BASIC_F7: Basic = Basic {
+    ep: EP_FAN0 + 7,
+    manufacturer: VENDOR,
+    model: "fan-8",
+};
 
 pub static IDENTIFY: IdentifyServer = IdentifyServer::new();
 
@@ -1401,7 +1503,7 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
     let paired = cfg.slots.iter().filter(|s| s.used()).count();
     STATE.lock(|s| s.borrow_mut().cfg = cfg);
 
-    println!("=== esp-fanbridge ===");
+    println!("=== esp-fanbridge {VERSION} (built {BUILD_DATE}) ===");
     let version = cc1101_init(&mut spi, &mut cs, &mut d);
     println!("CC1101 VERSION=0x{version:02x} (want 0x14) at {FREQ_KHZ} kHz");
     enter_rx(&mut spi, &mut cs);
