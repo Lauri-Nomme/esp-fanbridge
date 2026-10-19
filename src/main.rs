@@ -71,6 +71,7 @@ use zigbee_cluster_library::reporting::ReportingTable;
 use zigbee_cluster_library::server::ClusterCommand;
 use zigbee_cluster_library::server::ClusterServer;
 use zigbee_cluster_library::server::CommandOutcome;
+use zigbee_cluster_library::server::UnsupportedClusterResponder;
 use zigbee_cluster_library::sender::ZclReportTarget;
 use zigbee_cluster_library::sender::ZclSender;
 use zigbee_cluster_library::types::AttrInfo;
@@ -1265,6 +1266,8 @@ pub enum FanMode {
     Low,
     Medium,
     High,
+    /// ZCL `on` (4): the remote's fourth speed.
+    On,
 }
 
 impl ZclEnum8 for FanMode {
@@ -1274,6 +1277,7 @@ impl ZclEnum8 for FanMode {
             1 => Some(FanMode::Low),
             2 => Some(FanMode::Medium),
             3 => Some(FanMode::High),
+            4 => Some(FanMode::On),
             _ => None,
         }
     }
@@ -1283,6 +1287,7 @@ impl ZclEnum8 for FanMode {
             FanMode::Low => 1,
             FanMode::Medium => 2,
             FanMode::High => 3,
+            FanMode::On => 4,
         }
     }
 }
@@ -1346,6 +1351,7 @@ fn speed_of_mode(m: FanMode) -> u8 {
         FanMode::Low => 1,
         FanMode::Medium => 2,
         FanMode::High => 3,
+        FanMode::On => 4,
     }
 }
 
@@ -1353,7 +1359,8 @@ fn mode_of_speed(speed: u8) -> FanMode {
     match speed {
         1 => FanMode::Low,
         2 => FanMode::Medium,
-        3 | 4 => FanMode::High,
+        3 => FanMode::High,
+        4 => FanMode::On,
         _ => FanMode::Off,
     }
 }
@@ -1507,7 +1514,11 @@ impl<const SLOT: usize> ClusterServer for FanEp<SLOT> {
         if id.0 != 0x0000 {
             return Status::UnsupportedAttribute;
         }
-        let mode = STATE.lock(|s| mode_of_speed(s.borrow().cfg.slots[SLOT].speed));
+        let mode = STATE.lock(|s| {
+            let st = s.borrow();
+            let slot = &st.cfg.slots[SLOT];
+            if slot.power { mode_of_speed(slot.speed) } else { FanMode::Off }
+        });
         ok(A_FANMODE.encode(mode, out, offset))
     }
     fn decode_value(
@@ -1848,12 +1859,15 @@ pub static FAN5: FanEp<5> = FanEp;
 pub static FAN6: FanEp<6> = FanEp;
 pub static FAN7: FanEp<7> = FanEp;
 
+/// Answers `UNSUPPORTED_CLUSTER` to every request no server claimed.
+static UNSUPPORTED: UnsupportedClusterResponder<'static> = UnsupportedClusterResponder::new(&[]);
+
 /// Dispatches to all cluster servers in turn (trait objects avoid a 40-deep tuple).
 pub struct Chain;
 
 impl ClusterRequestHandler for Chain {
     fn handle(&self, r: &ClusterRequest<'_>, out: &mut [u8]) -> Option<ClusterReply> {
-        const SRV: [&dyn ClusterRequestHandler; 36] = [
+        const SRV: [&dyn ClusterRequestHandler; 37] = [
             &BASIC_MASTER, &IDENTIFY, &PAIR_SW, &PAIRING,
             &BASIC_F0, &FAN0, &PWR0, &DIR0,
             &BASIC_F1, &FAN1, &PWR1, &DIR1,
@@ -1863,6 +1877,9 @@ impl ClusterRequestHandler for Chain {
             &BASIC_F5, &FAN5, &PWR5, &DIR5,
             &BASIC_F6, &FAN6, &PWR6, &DIR6,
             &BASIC_F7, &FAN7, &PWR7, &DIR7,
+            // last: anything nobody handled still gets an answer, so a
+            // coordinator does not wait for a response that never comes
+            &UNSUPPORTED,
         ];
         SRV.iter().find_map(|h| h.handle(r, out))
     }
