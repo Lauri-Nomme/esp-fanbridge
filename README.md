@@ -48,6 +48,7 @@ sudo minicom -D /dev/ttyACM0 -b 115200      # Ctrl-A W to wrap, Ctrl-A X to exit
 | `raw <hex>` | transmit an arbitrary 24-bit code |
 | `name [text]` | show or set the device name (stored in flash) |
 | `name <slot> [text]` | show or set a fan's name |
+| `reboot` | restart the bridge (applies a changed endpoint set) |
 | `save` | force a config save |
 | `stat` | chip state: MARCSTATE, RSSI, IOCFG0/PKTCTRL0/MDMCFG2, captured segments, raw edge count, GDO0 level |
 | `dump` | the last captured edge timings |
@@ -62,6 +63,12 @@ sudo minicom -D /dev/ttyACM0 -b 115200      # Ctrl-A W to wrap, Ctrl-A X to exit
 | 1 | Basic, Identify, On/Off | `switch.…_1` — pairing mode (on = start learning) |
 | 2..9 | Basic, Fan Control `0x0202` | `fan.…_2` … `fan.…_9` — off/low/medium/high |
 | 10..17 | On/Off | `switch.…_10` … `_17` — direction (off = in, on = out) |
+
+The endpoint set is built from the configured remotes at boot: a slot that is
+not paired has no endpoint at all, so the coordinator only sees the fans that
+actually exist. After `pair` or `del`, restart the bridge (`reboot`) and
+re-interview it in Zigbee2MQTT — the endpoint list is part of the simple
+descriptors, which are only read during an interview.
 
 Requires Zigbee2MQTT **2.15.0 or newer**, or a patched 2.14.x: upstream HA
 discovery used to refuse `fan` exposes on non-primary endpoints and, because the

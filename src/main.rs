@@ -841,6 +841,7 @@ fn handle_command(c: &mut Console<'_>, line: &str) {
             c.outln("  save                 force save config");
             c.outln("  name [text]          show or set the device name");
             c.outln("  name <slot> [text]   show or set a fan name");
+            c.outln("  reboot               restart (needed after pair/del: the endpoint set is fixed at boot)");
         }
         "list" => print_list(c),
         "pair" => {
@@ -866,6 +867,7 @@ fn handle_command(c: &mut Console<'_>, line: &str) {
                         save_config(&st.cfg)
                     });
                     c.outln(if ok { "deleted" } else { "deleted (save failed)" });
+                    c.outln("reboot (or re-interview in Zigbee2MQTT) to drop the endpoint");
                 }
             }
         }
@@ -943,7 +945,7 @@ fn handle_command(c: &mut Console<'_>, line: &str) {
             DUMP_REQ.store(true, Ordering::Relaxed);
         }
         "desc" => {
-            for ep in ENDPOINTS.iter() {
+            for ep in advertised() {
                 let mut b = [0u8; 80];
                 {
                     use core::fmt::Write;
@@ -971,6 +973,10 @@ fn handle_command(c: &mut Console<'_>, line: &str) {
         "save" => {
             let ok = STATE.lock(|s| save_config(&s.borrow().cfg));
             c.outln(if ok { "saved" } else { "save failed" });
+        }
+        "reboot" => {
+            c.outln("rebooting...");
+            esp_hal::system::software_reset();
         }
         "name" => {
             // `name` -> device name, `name <slot> [text]` -> fan name
@@ -1571,25 +1577,85 @@ static IN_FAN: [u16; 2] = [basic::CLUSTER_ID, 0x0202];
 static IN_DIR: [u16; 1] = [0x0006];
 static NO_CLUSTERS: [u16; 0] = [];
 
-static ENDPOINTS: [EndpointDescriptor; 17] = [
-    EndpointDescriptor { endpoint: 1, profile_id: profile::HOME_AUTOMATION, device_id: 0x0000, device_version: 1, input_clusters: &IN_MASTER, output_clusters: &NO_CLUSTERS },
-    EndpointDescriptor { endpoint: 2, profile_id: profile::HOME_AUTOMATION, device_id: 0x002B, device_version: 1, input_clusters: &IN_FAN, output_clusters: &NO_CLUSTERS },
-    EndpointDescriptor { endpoint: 3, profile_id: profile::HOME_AUTOMATION, device_id: 0x002B, device_version: 1, input_clusters: &IN_FAN, output_clusters: &NO_CLUSTERS },
-    EndpointDescriptor { endpoint: 4, profile_id: profile::HOME_AUTOMATION, device_id: 0x002B, device_version: 1, input_clusters: &IN_FAN, output_clusters: &NO_CLUSTERS },
-    EndpointDescriptor { endpoint: 5, profile_id: profile::HOME_AUTOMATION, device_id: 0x002B, device_version: 1, input_clusters: &IN_FAN, output_clusters: &NO_CLUSTERS },
-    EndpointDescriptor { endpoint: 6, profile_id: profile::HOME_AUTOMATION, device_id: 0x002B, device_version: 1, input_clusters: &IN_FAN, output_clusters: &NO_CLUSTERS },
-    EndpointDescriptor { endpoint: 7, profile_id: profile::HOME_AUTOMATION, device_id: 0x002B, device_version: 1, input_clusters: &IN_FAN, output_clusters: &NO_CLUSTERS },
-    EndpointDescriptor { endpoint: 8, profile_id: profile::HOME_AUTOMATION, device_id: 0x002B, device_version: 1, input_clusters: &IN_FAN, output_clusters: &NO_CLUSTERS },
-    EndpointDescriptor { endpoint: 9, profile_id: profile::HOME_AUTOMATION, device_id: 0x002B, device_version: 1, input_clusters: &IN_FAN, output_clusters: &NO_CLUSTERS },
-    EndpointDescriptor { endpoint: 10, profile_id: profile::HOME_AUTOMATION, device_id: 0x0000, device_version: 1, input_clusters: &IN_DIR, output_clusters: &NO_CLUSTERS },
-    EndpointDescriptor { endpoint: 11, profile_id: profile::HOME_AUTOMATION, device_id: 0x0000, device_version: 1, input_clusters: &IN_DIR, output_clusters: &NO_CLUSTERS },
-    EndpointDescriptor { endpoint: 12, profile_id: profile::HOME_AUTOMATION, device_id: 0x0000, device_version: 1, input_clusters: &IN_DIR, output_clusters: &NO_CLUSTERS },
-    EndpointDescriptor { endpoint: 13, profile_id: profile::HOME_AUTOMATION, device_id: 0x0000, device_version: 1, input_clusters: &IN_DIR, output_clusters: &NO_CLUSTERS },
-    EndpointDescriptor { endpoint: 14, profile_id: profile::HOME_AUTOMATION, device_id: 0x0000, device_version: 1, input_clusters: &IN_DIR, output_clusters: &NO_CLUSTERS },
-    EndpointDescriptor { endpoint: 15, profile_id: profile::HOME_AUTOMATION, device_id: 0x0000, device_version: 1, input_clusters: &IN_DIR, output_clusters: &NO_CLUSTERS },
-    EndpointDescriptor { endpoint: 16, profile_id: profile::HOME_AUTOMATION, device_id: 0x0000, device_version: 1, input_clusters: &IN_DIR, output_clusters: &NO_CLUSTERS },
-    EndpointDescriptor { endpoint: 17, profile_id: profile::HOME_AUTOMATION, device_id: 0x0000, device_version: 1, input_clusters: &IN_DIR, output_clusters: &NO_CLUSTERS },
-];
+/// Endpoint table built at boot from the config: only paired remotes get
+/// endpoints, so a coordinator sees exactly the fans that exist.
+static EP_BUF: static_cell::StaticCell<[EndpointDescriptor<'static>; 17]> =
+    static_cell::StaticCell::new();
+
+/// The slice handed to the stack, kept so `desc` can print it.
+static EP_LIST: CsMutex<CriticalSectionRawMutex, RefCell<Option<&'static [EndpointDescriptor<'static>]>>> =
+    CsMutex::new(RefCell::new(None));
+
+fn master_descriptor() -> EndpointDescriptor<'static> {
+    EndpointDescriptor {
+        endpoint: EP_MASTER,
+        profile_id: profile::HOME_AUTOMATION,
+        device_id: 0x0000,
+        device_version: 1,
+        input_clusters: &IN_MASTER,
+        output_clusters: &NO_CLUSTERS,
+    }
+}
+
+fn fan_descriptor(slot: usize) -> EndpointDescriptor<'static> {
+    EndpointDescriptor {
+        endpoint: EP_FAN0 + slot as u8,
+        profile_id: profile::HOME_AUTOMATION,
+        device_id: 0x002B,
+        device_version: 1,
+        input_clusters: &IN_FAN,
+        output_clusters: &NO_CLUSTERS,
+    }
+}
+
+fn dir_descriptor(slot: usize) -> EndpointDescriptor<'static> {
+    EndpointDescriptor {
+        endpoint: EP_DIR0 + slot as u8,
+        profile_id: profile::HOME_AUTOMATION,
+        device_id: 0x0000,
+        device_version: 1,
+        input_clusters: &IN_DIR,
+        output_clusters: &NO_CLUSTERS,
+    }
+}
+
+/// Build the advertised endpoint list: endpoint 1 always, then a fan and a
+/// direction endpoint for every paired slot (endpoints stay tied to their slot,
+/// so a removed slot leaves a gap rather than renumbering the others).
+fn build_endpoints(cfg: &Config) -> &'static [EndpointDescriptor<'static>] {
+    let blank = EndpointDescriptor {
+        endpoint: 0,
+        profile_id: profile::HOME_AUTOMATION,
+        device_id: 0,
+        device_version: 1,
+        input_clusters: &NO_CLUSTERS,
+        output_clusters: &NO_CLUSTERS,
+    };
+    let buf = EP_BUF.init([blank; 17]);
+    let mut n = 0;
+    buf[n] = master_descriptor();
+    n += 1;
+    for i in 0..8 {
+        if cfg.slots[i].used() {
+            buf[n] = fan_descriptor(i);
+            n += 1;
+        }
+    }
+    for i in 0..8 {
+        if cfg.slots[i].used() {
+            buf[n] = dir_descriptor(i);
+            n += 1;
+        }
+    }
+    let list: &'static [EndpointDescriptor<'static>] = &buf[..n];
+    EP_LIST.lock(|l| *l.borrow_mut() = Some(list));
+    list
+}
+
+/// The advertised endpoints (empty before the table is built).
+fn advertised() -> &'static [EndpointDescriptor<'static>] {
+    EP_LIST.lock(|l| *l.borrow()).unwrap_or(&[])
+}
 
 pub static PAIR_SW: OnOffEp<1, -1, 2> = OnOffEp;
 pub static PWR0: OnOffEp<2, 0, 0> = OnOffEp;
@@ -1641,7 +1707,7 @@ pub type ZbFlash = zigbee::storage::FlashStorage<embassy_embedded_hal::adapter::
 pub type ZbStack = zigbee::Stack<'static, zigbee_mac::esp::EspMlme<'static>, Chain, ZbFlash>;
 pub static STACK: static_cell::StaticCell<ZbStack> = static_cell::StaticCell::new();
 
-fn stack_config() -> StackConfig<'static> {
+fn stack_config(endpoints: &'static [EndpointDescriptor<'static>]) -> StackConfig<'static> {
     StackConfig::new(
         NetworkConfig {
             extended_pan_id: IeeeAddress(NWK_EPID),
@@ -1673,7 +1739,7 @@ fn stack_config() -> StackConfig<'static> {
                 current_power_source: PowerSource::ConstantMainPower,
                 current_power_source_level: CurrentPowerSourceLevel::Full,
             },
-            endpoints: &ENDPOINTS,
+            endpoints,
         },
     )
 }
@@ -1717,13 +1783,14 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
 
     let cfg = load_config();
     let paired = cfg.slots.iter().filter(|s| s.used()).count();
+    let endpoints = build_endpoints(&cfg);
     STATE.lock(|s| s.borrow_mut().cfg = cfg);
 
     println!("=== esp-fanbridge {VERSION} (built {BUILD_DATE}) ===");
     let version = cc1101_init(&mut spi, &mut cs, &mut d);
     println!("CC1101 VERSION=0x{version:02x} (want 0x14) at {FREQ_KHZ} kHz");
     enter_rx(&mut spi, &mut cs);
-    println!("{paired} remote(s) configured");
+    println!("{paired} remote(s) configured, {n_endpoints} endpoint(s) advertised", n_endpoints = endpoints.len());
     if !cfg.device_name.is_empty() {
         println!("device name: {}", cfg.device_name.as_str());
     }
@@ -1734,7 +1801,7 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
     let ieee = esp_radio::ieee802154::Ieee802154::new(peripherals.IEEE802154);
     let mac = zigbee_mac::esp::EspMlme::new(ieee, esp_radio::ieee802154::Config::default());
     println!("Zigbee IEEE address: {:#018x}", mac.ieee_address());
-    let stack: &'static ZbStack = STACK.init(zigbee::Stack::new(mac, stack_config(), Chain, storage));
+    let stack: &'static ZbStack = STACK.init(zigbee::Stack::new(mac, stack_config(endpoints), Chain, storage));
 
     spawner.spawn(stack_task(stack).expect("spawn stack_task"));
 
@@ -1860,6 +1927,7 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
                     match on_frame(addr, button, now) {
                         Ev::Paired(a, i) => {
                             console.outln(fmt2(&mut linebuf, a, i as u32));
+                            console.outln("reboot (or re-interview in Zigbee2MQTT) to expose the new endpoint");
                         }
                         Ev::NoSlot(a) => {
                             console.outln(fmt2(&mut linebuf, a, 99));
