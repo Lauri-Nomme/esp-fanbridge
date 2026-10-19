@@ -626,11 +626,10 @@ fn enter_rx(spi: &mut Spi<'_, esp_hal::Blocking>, cs: &mut Output<'_>) {
     strobe(spi, cs, SRX);
 }
 
-fn send_code(
+async fn send_code(
     spi: &mut Spi<'_, esp_hal::Blocking>,
     cs: &mut Output<'_>,
     gdo0: &mut Flex<'_>,
-    d: &mut Delay,
     code: u32,
 ) {
     // GDO0 becomes the TX data input in async mode
@@ -641,26 +640,31 @@ fn send_code(
     strobe(spi, cs, SIDLE);
     write_patable(spi, cs, [0x00, 0xC0]);
     strobe(spi, cs, STX);
-    d.delay_millis(2);
+    Timer::after_millis(2).await;
 
+    // The symbol timing is generous (the decoder accepts 250..650 us for a short
+    // and 850..1800 us for a long symbol), so yielding between edges is free
+    // accuracy-wise. It matters: the whole frame takes ~400 ms, and busy-waiting
+    // through it starved the Zigbee task, which then timed out its transmissions
+    // (`MLME tx-done timeout`) after every command that also drove the fan.
     for _ in 0..REPEATS {
         for i in (0..24).rev() {
             if (code >> i) & 1 == 1 {
                 gdo0.set_high();
-                d.delay_micros(T_LONG);
+                Timer::after_micros(u64::from(T_LONG)).await;
                 gdo0.set_low();
-                d.delay_micros(T_SHORT);
+                Timer::after_micros(u64::from(T_SHORT)).await;
             } else {
                 gdo0.set_high();
-                d.delay_micros(T_SHORT);
+                Timer::after_micros(u64::from(T_SHORT)).await;
                 gdo0.set_low();
-                d.delay_micros(T_LONG);
+                Timer::after_micros(u64::from(T_LONG)).await;
             }
         }
         gdo0.set_high();
-        d.delay_micros(T_SHORT);
+        Timer::after_micros(u64::from(T_SHORT)).await;
         gdo0.set_low();
-        d.delay_millis(FRAME_GAP_MS);
+        Timer::after_millis(u64::from(FRAME_GAP_MS)).await;
     }
 
     // back to receive
@@ -2333,7 +2337,7 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
         let req = TX_REQ.swap(0, Ordering::Relaxed);
         if req != 0 {
             let code = req & 0x00FF_FFFF;
-            send_code(&mut spi, &mut cs, &mut gdo0, &mut d, code);
+            send_code(&mut spi, &mut cs, &mut gdo0, code).await;
             logical = gdo0.is_high();
             seg_start = Instant::now();
             n = 0;
