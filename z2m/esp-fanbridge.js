@@ -41,6 +41,19 @@ const PAIRING_CLUSTER = {
     commandsResponse: {},
 };
 
+// ZCL has no three-state direction, so the firmware serves it on its own cluster.
+const DIRECTION_CLUSTER = {
+    name: 'espDirection',
+    ID: 0xfc01,
+    attributes: {
+        direction: {name: 'direction', ID: 0x0000, type: 0x30, write: true},
+    },
+    commands: {},
+    commandsResponse: {},
+};
+
+const DIRECTIONS = ['in', 'out', 'auto'];
+
 // `exposes` is also called with a placeholder device (without endpoints) while
 // Zigbee2MQTT validates a definition, so the accessors have to tolerate that.
 const endpoints = (device) => (device && Array.isArray(device.endpoints) ? device.endpoints : []);
@@ -72,6 +85,7 @@ module.exports = {
             // percentage so Home Assistant offers four steps instead of three
             // modes plus an unrelated "on" preset.
             result.push(exposes.presets.fan().withState('state').withSpeed(1, 4).withEndpoint(String(endpoint)));
+            result.push(new exposes.Enum('direction', ea.STATE_SET, DIRECTIONS).withEndpoint(String(endpoint)).withDescription('Direction'));
         }
         return result;
     },
@@ -93,6 +107,15 @@ module.exports = {
         },
         fz.on_off,
         {
+            cluster: 'espDirection',
+            type: ['attributeReport', 'readResponse'],
+            convert: (model, msg, publish, options, meta) => {
+                if (msg.data.direction === undefined) return;
+                const direction = DIRECTIONS[msg.data.direction] ?? 'in';
+                return {[utils.postfixWithEndpointName('direction', msg, model, meta)]: direction};
+            },
+        },
+        {
             cluster: 'espPairing',
             type: ['attributeReport', 'readResponse'],
             convert: (model, msg) => {
@@ -104,6 +127,19 @@ module.exports = {
         },
     ],
     toZigbee: [
+        {
+            key: ['direction'],
+            convertSet: async (entity, key, value) => {
+                if (!DIRECTIONS.includes(value)) return;
+                await entity.write('espDirection', {direction: DIRECTIONS.indexOf(value)});
+                return {state: {direction: value}};
+            },
+            convertGet: async (entity) => {
+                if (entity.supportsInputCluster('espDirection')) {
+                    await entity.read('espDirection', ['direction']);
+                }
+            },
+        },
         {
             key: ['state', 'speed'],
             convertSet: async (entity, key, value, meta) => {
@@ -132,10 +168,12 @@ module.exports = {
     onEvent: async (event) => {
         if (event.type === 'start' || event.type === 'deviceInterview' || event.type === 'deviceJoined') {
             event.data.device.addCustomCluster('espPairing', PAIRING_CLUSTER);
+            event.data.device.addCustomCluster('espDirection', DIRECTION_CLUSTER);
         }
     },
     configure: async (device) => {
         device.addCustomCluster('espPairing', PAIRING_CLUSTER);
+        device.addCustomCluster('espDirection', DIRECTION_CLUSTER);
         // The firmware reports on change to the coordinator, so no binding is
         // needed; ask for the pairing stage so the value starts out known.
         const endpoint = device.endpoints.find((e) => e.supportsInputCluster('espPairing'));

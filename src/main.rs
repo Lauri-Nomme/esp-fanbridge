@@ -707,9 +707,29 @@ fn apply_button(slot: &mut Slot, button: u8) {
         }
         BTN_DIR_IN => slot.dir = 0,
         BTN_DIR_OUT => slot.dir = 1,
-        BTN_DIR_TOGGLE => slot.dir ^= 1,
+        // the third direction button puts the fan in automatic mode, where it
+        // alternates between the two directions on its own
+        BTN_DIR_TOGGLE => slot.dir = 2,
         BTN_POWER => slot.power = !slot.power,
         _ => {}
+    }
+}
+
+/// Button that selects a direction (0 in, 1 out, 2 auto).
+fn dir_button(dir: u8) -> Option<u8> {
+    match dir {
+        0 => Some(BTN_DIR_IN),
+        1 => Some(BTN_DIR_OUT),
+        2 => Some(BTN_DIR_TOGGLE),
+        _ => None,
+    }
+}
+
+fn dir_name(dir: u8) -> &'static str {
+    match dir {
+        0 => "in",
+        1 => "out",
+        _ => "auto",
     }
 }
 
@@ -850,7 +870,7 @@ fn format_slot<'a>(b: &'a mut [u8; 96], i: usize, sl: &Slot) -> &'a str {
         i,
         sl.addr,
         sl.speed,
-        if sl.dir == 0 { "in" } else { "out" },
+        dir_name(sl.dir),
         if sl.power { "on" } else { "off" },
         sl.name.as_str()
     );
@@ -869,7 +889,7 @@ fn handle_command(c: &mut Console<'_>, line: &str) {
             c.outln("  cancel               abort pairing");
             c.outln("  del <slot>           forget a remote");
             c.outln("  speed <slot> <1-4>   send a speed command");
-            c.outln("  dir <slot> <in|out>  send a direction command");
+            c.outln("  dir <slot> <in|out|auto>  send a direction command");
             c.outln("  power <slot> <on|off>");
             c.outln("  raw <hex>            transmit a raw 24-bit code");
             c.outln("  stat                 chip state + RSSI");
@@ -938,18 +958,33 @@ fn handle_command(c: &mut Console<'_>, line: &str) {
             let a = it.next().and_then(|v| v.parse::<usize>().ok());
             let dv = it.next().unwrap_or("");
             if let Some(a) = a {
-                let btn = match dv {
-                    "in" => Some(BTN_DIR_IN),
-                    "out" => Some(BTN_DIR_OUT),
+                let dir = match dv {
+                    "in" => Some(0),
+                    "out" => Some(1),
+                    "auto" => Some(2),
                     _ => None,
                 };
-                if let (true, Some(btn)) = (a < 8, btn) {
+                if let (true, Some(dir)) = (a < 8, dir) {
                     let code = STATE.lock(|s| {
-                        let st = s.borrow();
-                        code_for(&st.cfg.slots[a], btn)
+                        let mut st = s.borrow_mut();
+                        let slot = &mut st.cfg.slots[a];
+                        if !slot.used() {
+                            return 0;
+                        }
+                        slot.dir = dir;
+                        let snap = st.cfg;
+                        drop(st);
+                        save_config(&snap);
+                        code_for(&snap.slots[a], dir_button(dir).unwrap())
                     });
-                    TX_REQ.store(code | 0x8000_0000, Ordering::Relaxed);
-                    c.outln("sent");
+                    if code != 0 {
+                        TX_REQ.store(code | 0x8000_0000, Ordering::Relaxed);
+                        c.outln("sent");
+                    } else {
+                        c.outln("slot is empty");
+                    }
+                } else {
+                    c.outln("usage: dir <slot> <in|out|auto>");
                 }
             }
         }
@@ -1236,13 +1271,14 @@ const ZIGBEE_FLASH: core::ops::Range<u32> = 0x3f_0000..0x3f_4000;
 
 const EP_MASTER: u8 = 1;
 const EP_FAN0: u8 = 2; // ..9
-const EP_DIR0: u8 = 10; // ..17
 
 const CL_ONOFF: Cluster = Cluster::new(ClusterId(0x0006), "On/Off");
 const CL_FAN: Cluster = Cluster::new(ClusterId(0x0202), "Fan Control");
 const CL_LEVEL: Cluster = Cluster::new(ClusterId(0x0008), "Level Control");
 /// Manufacturer-specific status cluster (no standard one carries this).
 const CL_PAIRING: Cluster = Cluster::new(ClusterId(0xFC00), "espPairing");
+/// Manufacturer-specific direction cluster: ZCL has no three-state direction.
+const CL_DIRECTION: Cluster = Cluster::new(ClusterId(0xFC01), "espDirection");
 const A_ONOFF: Attribute<Bool, ReadOnly, Reportable> =
     CL_ONOFF.attribute(AttributeId(0x0000), "OnOff");
 const A_LEVEL: Attribute<Uint8, ReadWrite, Reportable> =
@@ -1253,12 +1289,15 @@ const A_STAGE: Attribute<Enum8<Stage>, ReadOnly, Reportable> =
     CL_PAIRING.attribute(AttributeId(0x0000), "stage");
 const A_PAIRED_COUNT: Attribute<Uint8, ReadOnly, Reportable> =
     CL_PAIRING.attribute(AttributeId(0x0001), "pairedCount");
+const A_DIRECTION: Attribute<Enum8<Direction>, ReadWrite, Reportable> =
+    CL_DIRECTION.attribute(AttributeId(0x0000), "direction");
 static ONOFF_ATTRS: [AttrInfo; 1] = [A_ONOFF.attr_info()];
 /// Shared reporting store: enough to accept Configure Reporting from the coordinator.
 static REPORTING: ReportingTable<16> = ReportingTable::new();
 static LEVEL_ATTRS: [AttrInfo; 1] = [A_LEVEL.attr_info()];
 static FAN_ATTRS: [AttrInfo; 1] = [A_FANMODE.attr_info()];
 static PAIRING_ATTRS: [AttrInfo; 2] = [A_STAGE.attr_info(), A_PAIRED_COUNT.attr_info()];
+static DIRECTION_ATTRS: [AttrInfo; 1] = [A_DIRECTION.attr_info()];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum FanMode {
@@ -1345,6 +1384,46 @@ impl ZclEnum8 for Stage {
     }
 }
 
+/// Fan direction: the remote's two fixed ones plus the automatic mode.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    In,
+    Out,
+    Auto,
+}
+
+impl Direction {
+    pub fn as_u8(self) -> u8 {
+        match self {
+            Direction::In => 0,
+            Direction::Out => 1,
+            Direction::Auto => 2,
+        }
+    }
+
+    fn from_u8(value: u8) -> Direction {
+        match value {
+            1 => Direction::Out,
+            2 => Direction::Auto,
+            _ => Direction::In,
+        }
+    }
+}
+
+impl ZclEnum8 for Direction {
+    fn from_raw(raw: u8) -> Option<Self> {
+        match raw {
+            0 => Some(Direction::In),
+            1 => Some(Direction::Out),
+            2 => Some(Direction::Auto),
+            _ => None,
+        }
+    }
+    fn into_raw(self) -> u8 {
+        self.as_u8()
+    }
+}
+
 fn speed_of_mode(m: FanMode) -> u8 {
     match m {
         FanMode::Off => 0,
@@ -1393,7 +1472,7 @@ fn ok(r: byte::Result<()>) -> Status {
 }
 
 /// On/Off server: which slot it drives and what the two states mean.
-pub struct OnOffEp<const EP: u8, const SLOT: i8, const KIND: u8>; // KIND 0=power 1=direction 2=pair
+pub struct OnOffEp<const EP: u8, const SLOT: i8, const KIND: u8>; // KIND 0=power 1=pairing
 
 impl<const EP: u8, const SLOT: i8, const KIND: u8> OnOffEp<EP, SLOT, KIND> {
     fn get(&self) -> bool {
@@ -1401,14 +1480,13 @@ impl<const EP: u8, const SLOT: i8, const KIND: u8> OnOffEp<EP, SLOT, KIND> {
             let st = s.borrow();
             match KIND {
                 0 => st.cfg.slots[SLOT as usize].power,
-                1 => st.cfg.slots[SLOT as usize].dir == 1,
                 _ => st.pairing,
             }
         })
     }
     fn set(&self, on: bool) {
         match KIND {
-            2 => {
+            1 => {
                 STATE.lock(|s| {
                     let mut st = s.borrow_mut();
                     st.pairing = on;
@@ -1423,24 +1501,15 @@ impl<const EP: u8, const SLOT: i8, const KIND: u8> OnOffEp<EP, SLOT, KIND> {
                     if !sl.used() {
                         return 0;
                     }
-                    sl.power = KIND == 0 && on;
-                    if KIND == 1 {
-                        sl.dir = u8::from(on);
-                    }
+                    sl.power = on;
                     let snap = st.cfg;
                     drop(st);
                     save_config(&snap);
                     let sl = &snap.slots[SLOT as usize];
-                    let btn = if KIND == 0 {
-                        if on {
-                            speed_button(if sl.speed == 0 { 1 } else { sl.speed }).unwrap_or(BTN_SPEED1)
-                        } else {
-                            BTN_POWER
-                        }
-                    } else if on {
-                        BTN_DIR_OUT
+                    let btn = if on {
+                        speed_button(if sl.speed == 0 { 1 } else { sl.speed }).unwrap_or(BTN_SPEED1)
                     } else {
-                        BTN_DIR_IN
+                        BTN_POWER
                     };
                     code_for(sl, btn)
                 });
@@ -1607,6 +1676,68 @@ impl ClusterRequestHandler for PairingEp {
 /// sees the same value a report carries.
 static STAGE_NOW: AtomicU32 = AtomicU32::new(0);
 
+/// Direction server, on the same endpoint as the fan it belongs to: ZCL has no
+/// three-state direction attribute, so this is a manufacturer-specific cluster.
+pub struct DirEp<const SLOT: usize>;
+
+impl<const SLOT: usize> ClusterServer for DirEp<SLOT> {
+    fn cluster(&self) -> Cluster {
+        CL_DIRECTION
+    }
+    fn attributes(&self) -> &'static [AttrInfo] {
+        &DIRECTION_ATTRS
+    }
+    fn reporting(&self) -> Option<&dyn AttributeReporting> {
+        Some(&REPORTING)
+    }
+    fn encode_value(&self, id: AttributeId, out: &mut [u8], offset: &mut usize) -> Status {
+        if id.0 != 0x0000 {
+            return Status::UnsupportedAttribute;
+        }
+        let dir = STATE.lock(|s| Direction::from_u8(s.borrow().cfg.slots[SLOT].dir));
+        ok(A_DIRECTION.encode(dir, out, offset))
+    }
+    fn decode_value(&self, id: AttributeId, ty: TypeId, bytes: &[u8], offset: &mut usize) -> Status {
+        if id.0 != 0x0000 {
+            return Status::UnsupportedAttribute;
+        }
+        let Ok(dir) = A_DIRECTION.decode(ty, bytes, offset) else {
+            return Status::InvalidDataType;
+        };
+        self.apply(dir);
+        Status::Success
+    }
+}
+
+impl<const SLOT: usize> DirEp<SLOT> {
+    fn apply(&self, dir: Direction) {
+        let code = STATE.lock(|s| {
+            let mut st = s.borrow_mut();
+            let slot = &mut st.cfg.slots[SLOT];
+            if !slot.used() {
+                return 0;
+            }
+            slot.dir = dir.as_u8();
+            let snap = st.cfg;
+            drop(st);
+            save_config(&snap);
+            code_for(&snap.slots[SLOT], dir_button(dir.as_u8()).unwrap())
+        });
+        if code != 0 {
+            TX_REQ.store(code | 0x8000_0000, Ordering::Relaxed);
+        }
+    }
+}
+
+impl<const SLOT: usize> ClusterRequestHandler for DirEp<SLOT> {
+    fn handle(&self, r: &ClusterRequest<'_>, out: &mut [u8]) -> Option<ClusterReply> {
+        if r.dst_endpoint != EP_FAN0 + SLOT as u8 {
+            return None;
+        }
+        self.handle_request(r, out)
+    }
+}
+
 impl<const SLOT: usize> ClusterRequestHandler for FanEp<SLOT> {
     fn handle(&self, r: &ClusterRequest<'_>, out: &mut [u8]) -> Option<ClusterReply> {
         if r.dst_endpoint != EP_FAN0 + SLOT as u8 {
@@ -1748,13 +1879,12 @@ pub static IDENTIFY: IdentifyServer = IdentifyServer::new();
 
 // ---- endpoint table
 static IN_MASTER: [u16; 3] = [basic::CLUSTER_ID, identify::CLUSTER_ID, 0x0006];
-static IN_FAN: [u16; 2] = [basic::CLUSTER_ID, 0x0202];
-static IN_DIR: [u16; 1] = [0x0006];
+static IN_FAN: [u16; 3] = [basic::CLUSTER_ID, 0x0202, 0xFC01];
 static NO_CLUSTERS: [u16; 0] = [];
 
 /// Endpoint table built at boot from the config: only paired remotes get
 /// endpoints, so a coordinator sees exactly the fans that exist.
-static EP_BUF: static_cell::StaticCell<[EndpointDescriptor<'static>; 17]> =
+static EP_BUF: static_cell::StaticCell<[EndpointDescriptor<'static>; 9]> =
     static_cell::StaticCell::new();
 
 /// The slice handed to the stack, kept so `desc` can print it.
@@ -1783,20 +1913,9 @@ fn fan_descriptor(slot: usize) -> EndpointDescriptor<'static> {
     }
 }
 
-fn dir_descriptor(slot: usize) -> EndpointDescriptor<'static> {
-    EndpointDescriptor {
-        endpoint: EP_DIR0 + slot as u8,
-        profile_id: profile::HOME_AUTOMATION,
-        device_id: 0x0000,
-        device_version: 1,
-        input_clusters: &IN_DIR,
-        output_clusters: &NO_CLUSTERS,
-    }
-}
-
-/// Build the advertised endpoint list: endpoint 1 always, then a fan and a
-/// direction endpoint for every paired slot (endpoints stay tied to their slot,
-/// so a removed slot leaves a gap rather than renumbering the others).
+/// Build the advertised endpoint list: endpoint 1 always, then one endpoint per
+/// paired slot (endpoints stay tied to their slot, so a removed slot leaves a
+/// gap rather than renumbering the others).
 fn build_endpoints(cfg: &Config) -> &'static [EndpointDescriptor<'static>] {
     let blank = EndpointDescriptor {
         endpoint: 0,
@@ -1806,19 +1925,13 @@ fn build_endpoints(cfg: &Config) -> &'static [EndpointDescriptor<'static>] {
         input_clusters: &NO_CLUSTERS,
         output_clusters: &NO_CLUSTERS,
     };
-    let buf = EP_BUF.init([blank; 17]);
+    let buf = EP_BUF.init([blank; 9]);
     let mut n = 0;
     buf[n] = master_descriptor();
     n += 1;
     for i in 0..8 {
         if cfg.slots[i].used() {
             buf[n] = fan_descriptor(i);
-            n += 1;
-        }
-    }
-    for i in 0..8 {
-        if cfg.slots[i].used() {
-            buf[n] = dir_descriptor(i);
             n += 1;
         }
     }
@@ -1832,7 +1945,7 @@ fn advertised() -> &'static [EndpointDescriptor<'static>] {
     EP_LIST.lock(|l| *l.borrow()).unwrap_or(&[])
 }
 
-pub static PAIR_SW: OnOffEp<1, -1, 2> = OnOffEp;
+pub static PAIR_SW: OnOffEp<1, -1, 1> = OnOffEp;
 pub static PAIRING: PairingEp = PairingEp;
 pub static PWR0: OnOffEp<2, 0, 0> = OnOffEp;
 pub static PWR1: OnOffEp<3, 1, 0> = OnOffEp;
@@ -1842,14 +1955,14 @@ pub static PWR4: OnOffEp<6, 4, 0> = OnOffEp;
 pub static PWR5: OnOffEp<7, 5, 0> = OnOffEp;
 pub static PWR6: OnOffEp<8, 6, 0> = OnOffEp;
 pub static PWR7: OnOffEp<9, 7, 0> = OnOffEp;
-pub static DIR0: OnOffEp<10, 0, 1> = OnOffEp;
-pub static DIR1: OnOffEp<11, 1, 1> = OnOffEp;
-pub static DIR2: OnOffEp<12, 2, 1> = OnOffEp;
-pub static DIR3: OnOffEp<13, 3, 1> = OnOffEp;
-pub static DIR4: OnOffEp<14, 4, 1> = OnOffEp;
-pub static DIR5: OnOffEp<15, 5, 1> = OnOffEp;
-pub static DIR6: OnOffEp<16, 6, 1> = OnOffEp;
-pub static DIR7: OnOffEp<17, 7, 1> = OnOffEp;
+pub static FANDIR0: DirEp<0> = DirEp;
+pub static FANDIR1: DirEp<1> = DirEp;
+pub static FANDIR2: DirEp<2> = DirEp;
+pub static FANDIR3: DirEp<3> = DirEp;
+pub static FANDIR4: DirEp<4> = DirEp;
+pub static FANDIR5: DirEp<5> = DirEp;
+pub static FANDIR6: DirEp<6> = DirEp;
+pub static FANDIR7: DirEp<7> = DirEp;
 pub static FAN0: FanEp<0> = FanEp;
 pub static FAN1: FanEp<1> = FanEp;
 pub static FAN2: FanEp<2> = FanEp;
@@ -1869,14 +1982,14 @@ impl ClusterRequestHandler for Chain {
     fn handle(&self, r: &ClusterRequest<'_>, out: &mut [u8]) -> Option<ClusterReply> {
         const SRV: [&dyn ClusterRequestHandler; 37] = [
             &BASIC_MASTER, &IDENTIFY, &PAIR_SW, &PAIRING,
-            &BASIC_F0, &FAN0, &PWR0, &DIR0,
-            &BASIC_F1, &FAN1, &PWR1, &DIR1,
-            &BASIC_F2, &FAN2, &PWR2, &DIR2,
-            &BASIC_F3, &FAN3, &PWR3, &DIR3,
-            &BASIC_F4, &FAN4, &PWR4, &DIR4,
-            &BASIC_F5, &FAN5, &PWR5, &DIR5,
-            &BASIC_F6, &FAN6, &PWR6, &DIR6,
-            &BASIC_F7, &FAN7, &PWR7, &DIR7,
+            &BASIC_F0, &FAN0, &PWR0, &FANDIR0,
+            &BASIC_F1, &FAN1, &PWR1, &FANDIR1,
+            &BASIC_F2, &FAN2, &PWR2, &FANDIR2,
+            &BASIC_F3, &FAN3, &PWR3, &FANDIR3,
+            &BASIC_F4, &FAN4, &PWR4, &FANDIR4,
+            &BASIC_F5, &FAN5, &PWR5, &FANDIR5,
+            &BASIC_F6, &FAN6, &PWR6, &FANDIR6,
+            &BASIC_F7, &FAN7, &PWR7, &FANDIR7,
             // last: anything nobody handled still gets an answer, so a
             // coordinator does not wait for a response that never comes
             &UNSUPPORTED,

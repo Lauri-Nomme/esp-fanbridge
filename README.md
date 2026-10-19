@@ -43,7 +43,7 @@ sudo minicom -D /dev/ttyACM0 -b 115200      # Ctrl-A W to wrap, Ctrl-A X to exit
 | `cancel` | abort pairing |
 | `del <slot>` | forget a remote |
 | `speed <slot> <1-4>` | transmit a speed command |
-| `dir <slot> <in\|out>` | transmit a direction command |
+| `dir <slot> <in\|out\|auto>` | transmit a direction command |
 | `power <slot> <on\|off>` | transmit power |
 | `raw <hex>` | transmit an arbitrary 24-bit code |
 | `name [text]` | show or set the device name (stored in flash) |
@@ -60,9 +60,8 @@ sudo minicom -D /dev/ttyACM0 -b 115200      # Ctrl-A W to wrap, Ctrl-A X to exit
 
 | Endpoint | Clusters | HA entity |
 |---|---|---|
-| 1 | Basic, Identify, On/Off | `switch.…_1` — pairing mode (on = start learning) |
-| 2..9 | Basic, Fan Control `0x0202` | `fan.…_2` … `fan.…_9` — off/low/medium/high |
-| 10..17 | On/Off | `switch.…_10` … `_17` — direction (off = in, on = out) |
+| 1 | Basic, Identify, On/Off, `espPairing` `0xFC00` | `switch.…_1` (pairing mode) + pairing stage/count sensors |
+| 2..9 | Basic, Fan Control `0x0202`, `espDirection` `0xFC01` | `fan.…_2` … `fan.…_9` (four speeds) + a `direction` select each |
 
 The endpoint set is built from the configured remotes at boot: a slot that is
 not paired has no endpoint at all, so the coordinator only sees the fans that
@@ -88,6 +87,8 @@ switch endpoints, and adds:
 | `switch.…_1` | pairing mode: on starts learning, off cancels |
 | `sensor.…_pairing_stage` | `idle`, `waiting_speed_1`..`waiting_speed_4`, `paired`, `failed` |
 | `sensor.…_paired_count` | how many remotes are stored |
+| `fan.…_<endpoint>` | the remote's fan: four speeds, on/off |
+| `select.…_direction_<endpoint>` | `in`, `out` or `auto` (the fan alternates by itself) |
 
 The stage is reported by the device as soon as it changes (including the
 `paired`/`failed` result, which stays visible for 10 seconds), so the user gets
@@ -125,6 +126,7 @@ keeps its own region at `0x3F0000..0x3F4000`, so the two don't collide.
 ## State model
 
 * speed buttons set `speed` and force `power = true`
-* `dir in` sets direction in, `dir out` sets it out, the middle button toggles
+* the direction buttons set `in`, `out` or `auto` (the third button); auto makes
+  the fan alternate between the two directions on its own
 * `power` toggles
 * every change is written back to flash
