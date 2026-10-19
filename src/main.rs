@@ -65,11 +65,14 @@ use zigbee_cluster_library::clusters::general::identify;
 use zigbee_cluster_library::clusters::general::identify::IdentifyServer;
 use zigbee_cluster_library::frame::Status;
 use zigbee_cluster_library::profile;
+use zigbee_cluster_library::reporting::AttributeReportBuilder;
 use zigbee_cluster_library::reporting::AttributeReporting;
 use zigbee_cluster_library::reporting::ReportingTable;
 use zigbee_cluster_library::server::ClusterCommand;
 use zigbee_cluster_library::server::ClusterServer;
 use zigbee_cluster_library::server::CommandOutcome;
+use zigbee_cluster_library::sender::ZclReportTarget;
+use zigbee_cluster_library::sender::ZclSender;
 use zigbee_cluster_library::types::AttrInfo;
 use zigbee_cluster_library::types::Attribute;
 use zigbee_cluster_library::types::AttributeId;
@@ -174,6 +177,8 @@ const PAIR_SEQ: [u8; 4] = [BTN_SPEED1, BTN_SPEED2, BTN_SPEED3, BTN_SPEED4];
 const PAIR_STEP_MS: u64 = 15_000;
 /// Whole pairing session timeout.
 const PAIR_SESSION_MS: u64 = 90_000;
+/// How long the outcome of a pairing attempt stays visible in the stage attribute.
+const PAIR_RESULT_MS: u64 = 10_000;
 
 const CC1101_CONFIG: &[(u8, u8)] = &[
     (IOCFG2, 0x0D),
@@ -474,6 +479,32 @@ pub struct State {
     pub pair_addr: u32,
     pub pair_step: usize,
     pub pair_last_ms: u64,
+    /// Transient outcome of the last pairing attempt, shown until `stage_until_ms`.
+    pub stage: Stage,
+    pub stage_until_ms: u64,
+}
+
+impl State {
+    /// The stage to report: a transient outcome if it has not expired, else
+    /// derived from the pairing state machine.
+    pub fn stage_at(&self, now_ms: u64) -> Stage {
+        if self.stage != Stage::Idle && now_ms < self.stage_until_ms {
+            return self.stage;
+        }
+        if !self.pairing {
+            return Stage::Idle;
+        }
+        match self.pair_step {
+            0 => Stage::WaitingSpeed1,
+            1 => Stage::WaitingSpeed2,
+            2 => Stage::WaitingSpeed3,
+            _ => Stage::WaitingSpeed4,
+        }
+    }
+
+    pub fn paired_count(&self) -> u8 {
+        self.cfg.slots.iter().filter(|s| s.used()).count() as u8
+    }
 }
 
 static STATE: CsMutex<CriticalSectionRawMutex, RefCell<State>> =
@@ -483,6 +514,8 @@ static STATE: CsMutex<CriticalSectionRawMutex, RefCell<State>> =
         pair_addr: 0,
         pair_step: 0,
         pair_last_ms: 0,
+        stage: Stage::Idle,
+        stage_until_ms: 0,
     }));
 
 /// Pending transmit request: 24-bit code, 0 = none.
@@ -491,6 +524,10 @@ static TX_REQ: AtomicU32 = AtomicU32::new(0);
 static DUMP_REQ: AtomicBool = AtomicBool::new(false);
 static STAT_REQ: AtomicBool = AtomicBool::new(false);
 static CLOCK_REQ: AtomicBool = AtomicBool::new(false);
+/// Set when the pairing status needs to be reported to the coordinator.
+static PAIRING_REPORT: AtomicBool = AtomicBool::new(false);
+/// Paired count last reported, to notice a change.
+static PAIRED_NOW: AtomicU32 = AtomicU32::new(0);
 /// opt-in noisy diagnostics
 static DEBUG_ON: AtomicBool = AtomicBool::new(false);
 /// counts every raw level change on GDO0, including sub-noise glitches
@@ -851,11 +888,18 @@ fn handle_command(c: &mut Console<'_>, line: &str) {
                 st.pair_step = 0;
                 st.pair_addr = 0;
                 st.pair_last_ms = 0;
+                st.stage = Stage::Idle;
+                st.stage_until_ms = 0;
             });
             c.outln("pairing: press SPEED 1, then 2, then 3, then 4 on the remote");
         }
         "cancel" => {
-            STATE.lock(|s| s.borrow_mut().pairing = false);
+            STATE.lock(|s| {
+                let mut st = s.borrow_mut();
+                st.pairing = false;
+                st.stage = Stage::Idle;
+                st.stage_until_ms = 0;
+            });
             c.outln("pairing cancelled");
         }
         "del" => {
@@ -974,6 +1018,22 @@ fn handle_command(c: &mut Console<'_>, line: &str) {
             let ok = STATE.lock(|s| save_config(&s.borrow().cfg));
             c.outln(if ok { "saved" } else { "save failed" });
         }
+        "basic" => {
+            // encode every Basic attribute the way a read response does
+            for id in [0x0000u16, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006, 0x0007, 0x4000] {
+                let mut buf = [0u8; 64];
+                let mut off = 0usize;
+                let st = BASIC_MASTER.encode_value(AttributeId(id), &mut buf, &mut off);
+                let mut line = [0u8; 80];
+                let pos = {
+                    let mut w = Writer80 { buf: &mut line, pos: 0 };
+                    let _ = core::fmt::Write::write_fmt(&mut w, format_args!("attr 0x{id:04X} status={st:?} len={off} data={:02X?}", &buf[..off]));
+                    w.pos
+                };
+                let t = core::str::from_utf8(&line[..pos]).unwrap_or("");
+                c.outln(t);
+            }
+        }
         "reboot" => {
             c.outln("rebooting...");
             esp_hal::system::software_reset();
@@ -1084,11 +1144,15 @@ fn on_frame(addr: u32, button: u8, now_ms: u64) -> Ev {
                         st.pairing = false;
                         st.pair_step = 0;
                         st.pair_addr = 0;
+                        st.stage = Stage::Paired;
+                        st.stage_until_ms = now_ms + PAIR_RESULT_MS;
                         return Ev::Paired(addr, i);
                     } else {
                         st.pairing = false;
                         st.pair_step = 0;
                         st.pair_addr = 0;
+                        st.stage = Stage::Failed;
+                        st.stage_until_ms = now_ms + PAIR_RESULT_MS;
                         return Ev::NoSlot(addr);
                     }
                 }
@@ -1176,17 +1240,24 @@ const EP_DIR0: u8 = 10; // ..17
 const CL_ONOFF: Cluster = Cluster::new(ClusterId(0x0006), "On/Off");
 const CL_FAN: Cluster = Cluster::new(ClusterId(0x0202), "Fan Control");
 const CL_LEVEL: Cluster = Cluster::new(ClusterId(0x0008), "Level Control");
+/// Manufacturer-specific status cluster (no standard one carries this).
+const CL_PAIRING: Cluster = Cluster::new(ClusterId(0xFC00), "espPairing");
 const A_ONOFF: Attribute<Bool, ReadOnly, Reportable> =
     CL_ONOFF.attribute(AttributeId(0x0000), "OnOff");
 const A_LEVEL: Attribute<Uint8, ReadWrite, Reportable> =
     CL_LEVEL.attribute(AttributeId(0x0000), "CurrentLevel");
 const A_FANMODE: Attribute<Enum8<FanMode>, ReadWrite, Reportable> =
     CL_FAN.attribute(AttributeId(0x0000), "FanMode");
+const A_STAGE: Attribute<Enum8<Stage>, ReadOnly, Reportable> =
+    CL_PAIRING.attribute(AttributeId(0x0000), "stage");
+const A_PAIRED_COUNT: Attribute<Uint8, ReadOnly, Reportable> =
+    CL_PAIRING.attribute(AttributeId(0x0001), "pairedCount");
 static ONOFF_ATTRS: [AttrInfo; 1] = [A_ONOFF.attr_info()];
 /// Shared reporting store: enough to accept Configure Reporting from the coordinator.
 static REPORTING: ReportingTable<16> = ReportingTable::new();
 static LEVEL_ATTRS: [AttrInfo; 1] = [A_LEVEL.attr_info()];
 static FAN_ATTRS: [AttrInfo; 1] = [A_FANMODE.attr_info()];
+static PAIRING_ATTRS: [AttrInfo; 2] = [A_STAGE.attr_info(), A_PAIRED_COUNT.attr_info()];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum FanMode {
@@ -1212,6 +1283,59 @@ impl ZclEnum8 for FanMode {
             FanMode::Low => 1,
             FanMode::Medium => 2,
             FanMode::High => 3,
+        }
+    }
+}
+
+/// What the pairing state machine is doing, as reported to the coordinator:
+/// which speed press it is waiting for, or how the last attempt ended.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Stage {
+    Idle,
+    WaitingSpeed1,
+    WaitingSpeed2,
+    WaitingSpeed3,
+    WaitingSpeed4,
+    Paired,
+    Failed,
+}
+
+impl Stage {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Stage::Idle => "idle",
+            Stage::WaitingSpeed1 => "waiting_speed_1",
+            Stage::WaitingSpeed2 => "waiting_speed_2",
+            Stage::WaitingSpeed3 => "waiting_speed_3",
+            Stage::WaitingSpeed4 => "waiting_speed_4",
+            Stage::Paired => "paired",
+            Stage::Failed => "failed",
+        }
+    }
+}
+
+impl ZclEnum8 for Stage {
+    fn from_raw(raw: u8) -> Option<Self> {
+        match raw {
+            0 => Some(Stage::Idle),
+            1 => Some(Stage::WaitingSpeed1),
+            2 => Some(Stage::WaitingSpeed2),
+            3 => Some(Stage::WaitingSpeed3),
+            4 => Some(Stage::WaitingSpeed4),
+            5 => Some(Stage::Paired),
+            6 => Some(Stage::Failed),
+            _ => None,
+        }
+    }
+    fn into_raw(self) -> u8 {
+        match self {
+            Stage::Idle => 0,
+            Stage::WaitingSpeed1 => 1,
+            Stage::WaitingSpeed2 => 2,
+            Stage::WaitingSpeed3 => 3,
+            Stage::WaitingSpeed4 => 4,
+            Stage::Paired => 5,
+            Stage::Failed => 6,
         }
     }
 }
@@ -1435,6 +1559,43 @@ impl<const SLOT: usize> FanEp<SLOT> {
     }
 }
 
+/// Status server for the pairing state machine, on the pairing endpoint.
+pub struct PairingEp;
+
+impl ClusterServer for PairingEp {
+    fn cluster(&self) -> Cluster {
+        CL_PAIRING
+    }
+    fn attributes(&self) -> &'static [AttrInfo] {
+        &PAIRING_ATTRS
+    }
+    fn reporting(&self) -> Option<&dyn AttributeReporting> {
+        Some(&REPORTING)
+    }
+    fn encode_value(&self, id: AttributeId, out: &mut [u8], offset: &mut usize) -> Status {
+        let count = STATE.lock(|s| s.borrow().paired_count());
+        let stage = Stage::from_raw(STAGE_NOW.load(Ordering::Relaxed) as u8).unwrap_or(Stage::Idle);
+        ok(match id.0 {
+            0x0000 => A_STAGE.encode(stage, out, offset),
+            0x0001 => A_PAIRED_COUNT.encode(Uint8(count), out, offset),
+            _ => return Status::UnsupportedAttribute,
+        })
+    }
+}
+
+impl ClusterRequestHandler for PairingEp {
+    fn handle(&self, r: &ClusterRequest<'_>, out: &mut [u8]) -> Option<ClusterReply> {
+        if r.dst_endpoint != EP_MASTER {
+            return None;
+        }
+        self.handle_request(r, out)
+    }
+}
+
+/// The stage last published to the coordinator, as a raw enum value; a read
+/// sees the same value a report carries.
+static STAGE_NOW: AtomicU32 = AtomicU32::new(0);
+
 impl<const SLOT: usize> ClusterRequestHandler for FanEp<SLOT> {
     fn handle(&self, r: &ClusterRequest<'_>, out: &mut [u8]) -> Option<ClusterReply> {
         if r.dst_endpoint != EP_FAN0 + SLOT as u8 {
@@ -1449,6 +1610,9 @@ impl<const SLOT: usize> ClusterRequestHandler for FanEp<SLOT> {
 const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "+", env!("FANBRIDGE_GIT"));
 /// Build date, `YYYYMMDD`, reported as `DateCode`.
 const BUILD_DATE: &str = env!("FANBRIDGE_DATE");
+/// What the Basic cluster reports as `SWBuildID`; ZCL limits it to 16 bytes,
+/// so it is the tag when it fits and the commit otherwise.
+const SW_BUILD_ID: &str = env!("FANBRIDGE_SW_BUILD_ID");
 
 const VENDOR: &str = "locals.tf";
 const MODEL_MASTER: &str = "esp-fanbridge";
@@ -1517,7 +1681,7 @@ impl ClusterServer for Basic {
             0x0005 => text_attr!(basic::MODEL_IDENTIFIER, self.model, out, offset),
             0x0006 => text_attr!(A_DATE_CODE, BUILD_DATE, out, offset),
             0x0007 => basic::POWER_SOURCE.encode(basic::PowerSource(0x01), out, offset),
-            0x4000 => text_attr!(A_SW_BUILD_ID, VERSION, out, offset),
+            0x4000 => text_attr!(A_SW_BUILD_ID, SW_BUILD_ID, out, offset),
             _ => return Status::UnsupportedAttribute,
         })
     }
@@ -1658,6 +1822,7 @@ fn advertised() -> &'static [EndpointDescriptor<'static>] {
 }
 
 pub static PAIR_SW: OnOffEp<1, -1, 2> = OnOffEp;
+pub static PAIRING: PairingEp = PairingEp;
 pub static PWR0: OnOffEp<2, 0, 0> = OnOffEp;
 pub static PWR1: OnOffEp<3, 1, 0> = OnOffEp;
 pub static PWR2: OnOffEp<4, 2, 0> = OnOffEp;
@@ -1688,8 +1853,8 @@ pub struct Chain;
 
 impl ClusterRequestHandler for Chain {
     fn handle(&self, r: &ClusterRequest<'_>, out: &mut [u8]) -> Option<ClusterReply> {
-        const SRV: [&dyn ClusterRequestHandler; 35] = [
-            &BASIC_MASTER, &IDENTIFY, &PAIR_SW,
+        const SRV: [&dyn ClusterRequestHandler; 36] = [
+            &BASIC_MASTER, &IDENTIFY, &PAIR_SW, &PAIRING,
             &BASIC_F0, &FAN0, &PWR0, &DIR0,
             &BASIC_F1, &FAN1, &PWR1, &DIR1,
             &BASIC_F2, &FAN2, &PWR2, &DIR2,
@@ -1749,6 +1914,36 @@ async fn stack_task(stack: &'static ZbStack) {
     let outcome = stack.run(AsyncDelay).await;
     println!("zigbee stack stopped: {outcome:?}");
     esp_hal::system::software_reset();
+}
+
+/// Send the pairing stage + paired count to the coordinator.
+async fn send_pairing_report(stack: &ZbStack) {
+    use core::sync::atomic::AtomicU8;
+    static SEQ: AtomicU8 = AtomicU8::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+    let stage = Stage::from_raw(STAGE_NOW.load(Ordering::Relaxed) as u8).unwrap_or(Stage::Idle);
+    let count = PAIRED_NOW.load(Ordering::Relaxed) as u8;
+    let mut buf = [0u8; 32];
+    let Ok(report) = AttributeReportBuilder::new(&mut buf, seq)
+        .and_then(|b| b.push(&A_STAGE, stage))
+        .and_then(|b| b.push(&A_PAIRED_COUNT, Uint8(count)))
+        .and_then(AttributeReportBuilder::finish)
+    else {
+        return;
+    };
+    let _ = stack
+        .device()
+        .send_attribute_report(
+            ZclReportTarget {
+                dst_short: 0,
+                src_endpoint: EP_MASTER,
+                dst_endpoint: 1,
+                profile_id: profile::HOME_AUTOMATION,
+            },
+            report,
+            &mut AsyncDelay,
+        )
+        .await;
 }
 
 // ----------------------------------------------------------------------- main
@@ -1825,6 +2020,24 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
         if let Some(line) = console.poll() {
             let s = cmd_str(&line);
             handle_command(&mut console, s);
+        }
+
+        // ---- pairing status: publish it when it changes
+        {
+            let now = t0.elapsed().as_millis();
+            let (stage, count) = STATE.lock(|s| {
+                let st = s.borrow();
+                (st.stage_at(now), u32::from(st.paired_count()))
+            });
+            let raw = u32::from(stage.into_raw());
+            if STAGE_NOW.load(Ordering::Relaxed) != raw || PAIRED_NOW.load(Ordering::Relaxed) != count {
+                STAGE_NOW.store(raw, Ordering::Relaxed);
+                PAIRED_NOW.store(count, Ordering::Relaxed);
+                PAIRING_REPORT.store(true, Ordering::Relaxed);
+            }
+        }
+        if PAIRING_REPORT.swap(false, Ordering::Relaxed) {
+            send_pairing_report(stack).await;
         }
 
         // ---- pending transmit

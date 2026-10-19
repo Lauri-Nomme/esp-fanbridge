@@ -25,6 +25,16 @@ fn main() {
         .unwrap_or_else(|| "unknown".to_string());
     println!("cargo:rustc-env=FANBRIDGE_GIT={describe}");
 
+    // ZCL caps `SWBuildID` at 16 characters, so a long `describe` (a tag plus
+    // commits plus `-dirty`) falls back to the commit itself.
+    let sw_build_id = if describe.len() <= 16 {
+        describe.clone()
+    } else {
+        let commit = run(&["git", "rev-parse", "--short=7", "HEAD"]).unwrap_or_else(|| "unknown".to_string());
+        if describe.ends_with("-dirty") { format!("{commit}-dirty") } else { commit }
+    };
+    println!("cargo:rustc-env=FANBRIDGE_SW_BUILD_ID={sw_build_id}");
+
     let date = run(&["date", "-u", "+%Y%m%d"]).unwrap_or_else(|| "00000000".to_string());
     println!("cargo:rustc-env=FANBRIDGE_DATE={date}");
 }

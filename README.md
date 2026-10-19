@@ -76,6 +76,23 @@ assert fires while the payloads are being built, it dropped *every* entity of th
 device. The fix is [Koenkk/zigbee2mqtt#33435](https://github.com/Koenkk/zigbee2mqtt/pull/33435).
 
 
+## Home Assistant / Zigbee2MQTT
+
+Copy [`z2m/esp-fanbridge.js`](z2m/esp-fanbridge.js) into Zigbee2MQTT's
+`data/external_converters/` directory and restart it. The converter registers the
+firmware's manufacturer-specific `espPairing` cluster, exposes the fan and
+switch endpoints, and adds:
+
+| Entity | Meaning |
+|---|---|
+| `switch.…_1` | pairing mode: on starts learning, off cancels |
+| `sensor.…_pairing_stage` | `idle`, `waiting_speed_1`..`waiting_speed_4`, `paired`, `failed` |
+| `sensor.…_paired_count` | how many remotes are stored |
+
+The stage is reported by the device as soon as it changes (including the
+`paired`/`failed` result, which stays visible for 10 seconds), so the user gets
+feedback while pressing the four speed buttons on the remote.
+
 ## Diagnostics cheat-sheet
 
 | `stat` shows | Meaning |
