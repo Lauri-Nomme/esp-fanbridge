@@ -46,6 +46,7 @@ sudo minicom -D /dev/ttyACM0 -b 115200      # Ctrl-A W to wrap, Ctrl-A X to exit
 | `dir <slot> <in\|out>` | transmit a direction command |
 | `power <slot> <on\|off>` | transmit power |
 | `raw <hex>` | transmit an arbitrary 24-bit code |
+| `name [text]` | show or set the device name (stored in flash) |
 | `save` | force a config save |
 | `stat` | chip state: MARCSTATE, RSSI, IOCFG0/PKTCTRL0/MDMCFG2, captured segments, raw edge count, GDO0 level |
 | `dump` | the last captured edge timings |
