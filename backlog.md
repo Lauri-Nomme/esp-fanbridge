@@ -38,24 +38,20 @@ joining. Measured effect: first command after a reset moved from 12.9 s to
   revisit `rx-on-when-idle` (`0x88`) now that the stack has moved on — the older
   `MacError(NoData)` may be gone, and this device is mains powered anyway.
 
-## 2. Console commands do not update the stored state — **S**
+## 2. Console commands update the stored state — **done**
 
-`speed <slot> <n>`, `dir <slot> …` and `power <slot> …` transmit the infrared…
-er, RF code but leave `cfg.slots[n]` untouched. So after using the console the
-device still reports the old speed/direction/power — and Home Assistant shows a
-stale value until the next Zigbee write or a remote press. The Zigbee path does
-update the state correctly.
-
-Fix: update the slot exactly like the cluster handlers do (respecting the "turn
-on when a speed is chosen" rule), save, and then transmit.
+`speed`, `dir` and `power` used to transmit without touching `cfg.slots[n]`, so
+the device and Home Assistant kept reporting the old state after a console-driven
+change. They now update and save the slot like the Zigbee handlers do (including
+turning power on with a speed press) and reject empty slots. Verified: after
+`speed 1 3`, `dir 1 out`, `power 1 off` the slot reads `speed=3 dir=out power=0`.
 
 ---
 
-## 3. `debug` is a toggle, not a setter — **S**
+## 3. `debug` is a setter — **done**
 
-`debug` flips the flag, so a scripted `debug on` can silently turn debugging
-*off* (this bit us twice while capturing evidence). Make it
-`debug [on|off|status]`, mirroring `txmode`.
+`debug on|off` sets it explicitly, a bare `debug` reports the state. (It used to
+toggle, which silently turned debugging off in scripted captures twice.)
 
 ---
 
@@ -117,15 +113,14 @@ and free the main loop.
 
 ---
 
-## 8. Tooling: the console driver — **S**
+## 8. Tooling: the console driver — **done**
 
-`/tmp/fan.py` (scheduled commands + timestamped output, one process owns the
-port, `-p PORT`, `-r` reset, `-t seconds`) was written to stop fighting
-`cat`/`printf` over ssh. It is now the tool used for every hardware test. Worth
-committing as `tools/fan.py` with a short usage note in the README.
+`tools/fan.py` is in the repo with a usage note in the README: scheduled
+commands, timestamps, optional reset, `-p PORT`, `-t seconds`. Every hardware
+test in this session used it.
 
-Related lesson: background captures must run `python3 -u`, otherwise the output
-is block-buffered and the file stays empty until the process exits.
+Related lesson, also in the script docstring: background captures must run
+`python3 -u`, otherwise the output is block-buffered and the file stays empty.
 
 ---
 
@@ -171,12 +166,16 @@ zigbee-herdsman-converters, so no local file is needed:
 
 ---
 
-## 12. Cosmetic leftovers — **S**
+## 12. Cosmetic leftovers — **partly done**
 
-* Stale Home Assistant entities from the old 17-endpoint layout (`switch_10`,
-  `switch_11`, `state_12`, `power_on_behavior_*`) had to be cleared by hand with
-  retained empty discovery payloads. A note in the README about what to do after
-  an endpoint-set change would save that.
-* `speed_2_2` / `state_2_2` style keys appeared once when the converter returned
-  already-postfixed properties; Zigbee2MQTT postfixes `toZigbee` results itself.
-  Documented here so nobody debugs it twice.
+* The README now explains how to clear a stale retained discovery topic after an
+  endpoint-set change (empty retained payload on the `homeassistant/.../config`
+  topic).
+* The device's published state still carries a few stale keys from earlier
+  definitions: `state_10`, `state_11`, `state_12`, plus `speed_2_2`/`state_2_2`
+  from the old double-postfix bug. Harmless, but they live in Zigbee2MQTT's state
+  cache; deleting the device's cache (or re-interviewing after clearing it) makes
+  them go away.
+* `speed_2_2`/`state_2_2` came from returning already-postfixed properties in
+  `toZigbee`; Zigbee2MQTT postfixes those results itself. Noted so nobody debugs
+  it twice.
