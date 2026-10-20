@@ -101,6 +101,15 @@ feedback while pressing the four speed buttons on the remote.
 
 ## Debugging
 
+`tools/fan.py` drives the console from a script (it schedules commands and
+prints everything with timestamps, which is much less error-prone than juggling
+`cat`/`printf` over ssh):
+
+```sh
+sudo python3 tools/fan.py -p /dev/ttyACM0 -t 20 "1:speed 0 4" "10:list"
+sudo python3 tools/fan.py -r -t 15            # reset the board and watch it boot
+```
+
 Every command that arrives over Zigbee is printed on the console, with the slot
 it controls, so it is visible what Home Assistant actually did:
 
@@ -128,6 +137,15 @@ shows exactly that state in Home Assistant.
 | `segs>0`, no `rx` line | hearing something, but it doesn't pass the frame validator (→ `junk:` lines) |
 | `rx device=… button=…` | a valid frame decoded |
 | `iocfg0≠0x0d` | GDO0 is not in serial-data mode (the `clock` self-test must be turned off) |
+
+After pairing or deleting a remote the endpoint list changes, so a stale entity
+can stay behind in Home Assistant (the retained discovery message is only
+replaced when the device is re-interviewed). Clear it with an empty retained
+message, e.g.
+
+```sh
+mosquitto_pub -h <broker> -r -n -t homeassistant/switch/<ieee>/switch_10/config
+```
 
 If `espflash` fails with a panic (`range end index ... out of range`) after an
 interrupted flash, the board is wedged and ignores the reset lines; re-enumerate

@@ -1080,6 +1080,7 @@ fn handle_command(c: &mut Console<'_>, line: &str) {
             c.outln("  power <slot> <on|off>");
             c.outln("  raw <hex>            transmit a raw 24-bit code");
             c.outln("  stat                 chip state + RSSI");
+            c.outln("  debug [on|off]       noisy diagnostics (no argument: show state)");
             c.outln("  desc                 show the advertised endpoint descriptors");
             c.outln("  dump                 show the last captured edges");
             c.outln("  clock                toggle GDO0 = XOSC/192 clock (pin self-test)");
@@ -1088,6 +1089,7 @@ fn handle_command(c: &mut Console<'_>, line: &str) {
             c.outln("  name <slot> [text]   show or set a fan name");
             c.outln("  txmode [packet|async] show or switch how frames are transmitted");
             c.outln("  repeats [n]          frames per command (and show gap)");
+            c.outln("  slots                raw dump of all eight slots");
             c.outln("  reboot               restart (needed after pair/del: the endpoint set is fixed at boot)");
         }
         "list" => print_list(c),
@@ -1129,18 +1131,33 @@ fn handle_command(c: &mut Console<'_>, line: &str) {
             let a = it.next().and_then(|v| v.parse::<usize>().ok());
             let sp = it.next().and_then(|v| v.parse::<u8>().ok());
             if let (Some(a), Some(sp)) = (a, sp) {
-                if a < 8 {
-                    if let Some(btn) = speed_button(sp) {
-                        let code = STATE.lock(|s| {
-                            let st = s.borrow();
-                            code_for(&st.cfg.slots[a], btn)
-                        });
+                if let Some(btn) = speed_button(sp) {
+                    // keep the stored state in step with what the fan will do,
+                    // exactly like the Zigbee write does
+                    let code = STATE.lock(|s| {
+                        let mut st = s.borrow_mut();
+                        let slot = &mut st.cfg.slots[a];
+                        if !slot.used() {
+                            return 0;
+                        }
+                        slot.speed = sp;
+                        slot.power = true;
+                        let snap = st.cfg;
+                        drop(st);
+                        save_config(&snap);
+                        code_for(&snap.slots[a], btn)
+                    });
+                    if code != 0 {
                         TX_REQ.store(code | 0x8000_0000, Ordering::Relaxed);
                         c.outln("sent");
                     } else {
-                        c.outln("speed must be 1..4");
+                        c.outln("slot is empty");
                     }
+                } else {
+                    c.outln("speed must be 1..4");
                 }
+            } else {
+                c.outln("usage: speed <slot> <1-4>");
             }
         }
         "dir" => {
@@ -1182,21 +1199,30 @@ fn handle_command(c: &mut Console<'_>, line: &str) {
             let pv = it.next().unwrap_or("");
             if let Some(a) = a {
                 if a < 8 && (pv == "on" || pv == "off") {
-                    let btn = STATE.lock(|s| {
-                        let st = s.borrow();
-                        let sl = &st.cfg.slots[a];
-                        if pv == "off" {
-                            some_if(sl.power, BTN_POWER)
-                        } else {
-                            some_if(!sl.power, speed_button(if sl.speed == 0 { 1 } else { sl.speed }).unwrap_or(BTN_SPEED1))
+                    let wanted = pv == "on";
+                    let code = STATE.lock(|s| {
+                        let mut st = s.borrow_mut();
+                        let slot = &mut st.cfg.slots[a];
+                        if !slot.used() || slot.power == wanted {
+                            return 0;
                         }
+                        slot.power = wanted;
+                        let snap = st.cfg;
+                        drop(st);
+                        save_config(&snap);
+                        // turning on is done with a speed press, as the remote does
+                        let btn = if wanted {
+                            speed_button(if snap.slots[a].speed == 0 { 1 } else { snap.slots[a].speed }).unwrap_or(BTN_SPEED1)
+                        } else {
+                            BTN_POWER
+                        };
+                        code_for(&snap.slots[a], btn)
                     });
-                    if let Some(b) = btn {
-                        let code = STATE.lock(|s| code_for(&s.borrow().cfg.slots[a], b));
+                    if code != 0 {
                         TX_REQ.store(code | 0x8000_0000, Ordering::Relaxed);
                         c.outln("sent");
                     } else {
-                        c.outln("already in that state");
+                        c.outln("slot is empty or already in that state");
                     }
                 }
             }
@@ -1232,9 +1258,22 @@ fn handle_command(c: &mut Console<'_>, line: &str) {
             STAT_REQ.store(true, Ordering::Relaxed);
         }
         "debug" => {
-            let on = !DEBUG_ON.load(Ordering::Relaxed);
-            DEBUG_ON.store(on, Ordering::Relaxed);
-            c.outln(if on { "debug on" } else { "debug off" });
+            match it.next() {
+                Some("on") => {
+                    DEBUG_ON.store(true, Ordering::Relaxed);
+                    c.outln("debug on");
+                }
+                Some("off") => {
+                    DEBUG_ON.store(false, Ordering::Relaxed);
+                    c.outln("debug off");
+                }
+                None | Some("status") => c.outln(if DEBUG_ON.load(Ordering::Relaxed) {
+                    "debug on"
+                } else {
+                    "debug off"
+                }),
+                Some(_) => c.outln("usage: debug [on|off]"),
+            }
         }
         "clock" => {
             CLOCK_REQ.store(true, Ordering::Relaxed);
