@@ -179,3 +179,203 @@ zigbee-herdsman-converters, so no local file is needed:
 * `speed_2_2`/`state_2_2` came from returning already-postfixed properties in
   `toZigbee`; Zigbee2MQTT postfixes those results itself. Noted so nobody debugs
   it twice.
+
+---
+
+# Round 2 — ideas (not implemented, discuss first)
+
+Ordered by area, not priority. Effort: **S** minutes, **M** an evening, **L** a
+session.
+
+## State visibility
+
+### 13. Report fan/switch/direction changes — **M, probably the most valuable**
+
+Right now **only the pairing cluster sends attribute reports**. A press on a
+physical remote changes the device's state, but nothing tells the coordinator:
+Home Assistant keeps showing the old speed/direction until something else
+triggers a read. That breaks the "state is readable back" requirement as soon as
+someone uses the remote instead of HA.
+
+Fix: send `Report Attributes` on change for `FanMode` (per fan endpoint),
+`OnOff` (pairing switch) and `direction` (per fan), from *both* the RF path and
+the Zigbee writes. `send_pairing_report` already shows the pattern; generalise it
+(bitmask of dirty endpoints + the existing retry loop).
+
+Verify: press speed 2 on a remote → HA shows speed 2 within a second, no polling.
+
+### 14. Publish the full state after (re)join — **S**
+
+After a reboot or re-interview the coordinator only knows defaults. Send one
+report with every attribute once joined (reuse #13's machinery), so HA and Z2M
+resync without waiting for a change.
+
+## RF / OOK tuning
+
+### 15. Apply TI DN022's OOK receiver settings — **S/M**
+
+DN022 ("CC110x OOK/ASK register settings") says SmartRF's FSK/MSK AGC defaults
+are not optimal for OOK and recommends `AGCCTRL2 = 0x03..0x07`,
+`AGCCTRL1 = 0x00`, `AGCCTRL0 = 0x91 or 0x92`, plus `FREND1 = 0xB6` for an RX
+filter > 101 kHz (`0x56` for ≤ 101 kHz).
+
+Ours: `AGCCTRL2=0x03` ✓, `AGCCTRL0=0x91` ✓, but `AGCCTRL1=0x40` and
+`FREND1=0x56` while our filter is 203 kHz (`MDMCFG4=0x87` → CHANBW_E=2,
+CHANBW_M=0 → 26e6/(8·4·4) ≈ 203 kHz). Worth trying `0x00` and `0xB6`, measuring
+decode range/noise on the listener and the real remotes.
+
+Also confirmed from the datasheet: `MDMCFG2.MOD_FORMAT` `011` = ASK/OOK and
+`010` is *reserved* (not OOK) — which is exactly the packet-mode bug we hit.
+
+### 16. Log RSSI per received frame — **S**
+
+`rx device=… button=… rssi=-74dBm`. Costs one register read; turns "the remote
+worked 3 of 5 times" into a number and shows whether the fanbridge or the remote
+is the weak side.
+
+### 17. Calibrate the carrier against a real remote — **M**
+
+The listener can measure both transmitters, but only at comparable levels (ours
+is ~24 dB stronger at 0.3 m). With an attenuator or a fixed distance, compare our
+carrier frequency against a remote's; if there is a systematic offset, adjust the
+frequency word (or model the crystal tolerance) instead of assuming 26 MHz.
+
+### 18. Per-fan transmit profile — **M**
+
+`lr-r` ignores packet mode while `lr-l` accepts it. Store per-slot transmit
+parameters (mode, repeats, gap, PA level) so a picky receiver can be tuned
+individually without breaking the others. Also makes the "learn the remote's
+pattern" idea possible (the remote sends 4-5 frames with a long gap, we send 8
+with 12 ms).
+
+## Pairing / endpoints
+
+### 19. Auto-restart after a successful pairing — **S**
+
+The endpoint set is fixed at boot, so a new remote needs `reboot` + re-interview.
+Restarting automatically after `Paired` (with a console message) removes the most
+confusing step in the whole flow. `restart_required` already exists as a signal.
+
+### 20. Pairing session timeout is dead code — **S**
+
+`PAIR_SESSION_MS` is defined and never used (compiler warning). Implement the
+90 s session limit and report `failed` (stage 6) when it expires, so HA shows a
+timeout instead of "waiting forever".
+
+### 21. Distinct LED pattern per pairing stage — **S**
+
+The LED already blinks fast while pairing. Give "learned"/"failed" their own
+short patterns so pairing can be done without the console.
+
+## Zigbee stack / device behaviour
+
+### 22. Answer ZDO `Bind_req` — **M**
+
+Z2M tries to bind during configure and logs `bindRsp after 10000ms` timeouts
+today. Answering the request (and storing the binding) is the textbook behaviour
+and would make reporting (#13) robust even if the coordinator stops accepting
+unsolicited reports.
+
+### 23. `fanModeSequence` attribute — **S**
+
+ZCL 4.4.2.2.2 (`0x0202` cluster, attribute `0x0001`) declares which mode
+sequences the device supports. We implement `Off/Low/Medium/High/On`; declaring
+it is cheap and helps coordinators reason about the fan.
+
+### 24. Make Identify blink the LED — **S**
+
+The Identify cluster is served, but the LED ignores it, so Z2M's "identify"
+button does nothing visible. Blink for `identify_time` seconds.
+
+### 25. Revisit `rx-on-when-idle` — **M**
+
+The device is mains powered but declares itself sleepy (`0x80`). `0x88` failed
+earlier with `MacError(NoData)`; the stack has changed a lot since. Staying awake
+would remove polling latency entirely (see backlog §1).
+
+### 26. Expose the watchdog counters — **S**
+
+`rxRearmCount` (how often the radio had to be re-armed, see #6 in round 1) as a
+diagnostic attribute — a device that needs re-arming often is telling us
+something.
+
+## Firmware structure / tooling
+
+### 27. Split the protocol logic into a testable library — **M**
+
+`expand_code`, `decode_frame`, the config serialisation/migration and the
+speed↔mode mappings are pure functions with **no tests**, because the crate
+depends on esp-hal and cannot run on the host. Moving them into a `no_std` lib
+crate (no esp dependencies) allows `cargo test` on the workstation and protects
+the config migration and the 49-byte expansion, which are exactly the parts that
+broke unnoticed.
+
+### 28. CI: build + clippy + fmt — **S/M**
+
+A GitHub Actions workflow with the esp-rs toolchain, `cargo build --release` for
+`riscv32imac-unknown-none-elf`, `cargo fmt --check` and `clippy`. Catches
+"compiles only because of my local toolchain" regressions without hardware.
+
+### 29. Tagged releases with binaries — **S**
+
+Attach the `.bin`/`.elf` to a tag so flashing does not require the toolchain
+(`esptool`/`espflash` can write a bin directly).
+
+### 30. Persist the last panic — **M**
+
+`esp-backtrace` prints to the console, which nobody sees when the device is in a
+cabinet. Writing a panic record (message/PC) to a spare flash sector and printing
+it on the next boot would explain spontaneous reboots.
+
+## Console / UX
+
+### 31. `status` command — **S**
+
+Uptime, transmit count, received-frame count, watchdog re-arms, current mode and
+frequency in one line — the first thing to ask a device when debugging.
+
+### 32. Per-slot overrides from the console — **S**
+
+`set <slot> repeats 12`, `set <slot> gap 200`, `set <slot> power 0x60`: expose
+what #18 stores without a reflash.
+
+### 33. Config backup/restore — **S**
+
+`cfg dump` prints the 512-byte config as hex; `cfg load <hex>` restores it. Makes
+"re-pair once, flash often" cheap.
+
+## Z2M / Home Assistant
+
+### 34. Upstream device definition (was #10) — **M/L**
+
+### 35. Remove the local discovery patch (was #9) — **S**, waiting for a release
+
+### 36. "Apply pairing change" button — **M**
+
+The device could accept a manufacturer-specific command (reboot) so HA gets a
+button for `reboot`/`restart_required`, instead of the user needing the console
+after a pairing change.
+
+### 37. Names as read-only sensors — **rejected for now**
+
+We decided earlier not to hack entity naming: HA names live in Zigbee2MQTT/HA.
+Device-side names stay in the console only. Revisit only if a real need appears.
+
+## Docs
+
+### 38. Wiring diagram in the repo — **S**
+
+`WIRING.md` (CSN/SCK/MOSI/MISO/GDO0/power, plus the friction-fit fix) lives in
+`c6/hw/` and is not shipped with the firmware repo.
+
+### 39. Troubleshooting decision tree — **S**
+
+"Nothing happens" → (1) `stat`: is `marcstate=0x0d`? (2) `txmode`/`repeats` sane?
+(3) `desc`: are the endpoints there? (4) `zb:` lines on a HA command? — the order
+we actually debug in.
+
+### 40. Reference waveform in `docs/PROTOCOL.md` — **S**
+
+Add the measured remote frame (`n=49`, ~415/1199 µs, 38.87 ms, captured at 8 µs
+resolution) next to the nominal description, so a future "is our TX right?"
+question can be answered by comparison.
