@@ -7,66 +7,36 @@ Legend: **S** = small (minutes), **M** = an evening, **L** = a session of its ow
 
 ---
 
-## 1. Zigbee command delivery is flaky — **M/L, next up**
+## 1. Zigbee command delivery — measured, announce added
 
-**Symptom.** Commands published while the device runs sometimes come back as
-`MAC_TRANSACTION_EXPIRED (0xf0)` from the coordinator, and are applied minutes
-later (or not at all). Observed repeatedly while testing:
+**Original symptom.** Commands sometimes came back as
+`MAC_TRANSACTION_EXPIRED (0xf0)` and appeared to be applied minutes later.
 
-```
-Error: ZCL command 0x9c139efffecb054c/2 hvacFanCtrl.write({"fanMode":1} ...)
-  failed (Data request failed with error: 'MAC_TRANSACTION_EXPIRED' (0xf0))
-```
+**What the measurements show.**
 
-followed later by:
+* Steady state is fine: 10 commands 2 s apart and 15 commands 300 ms apart were
+  all applied (latency 0.5–2 s), with **zero** expired transactions.
+* Over 24 h, 88 of 89 expiries belonged to this device — and they cluster
+  exactly in the windows where it was being flashed/rebooted. The only other
+  device (an Aqara sensor) had one.
+* After a reset, commands are **queued, not lost**: 20 publishes over 40 s all
+  landed, the first one 12.9 s after the reset (boot + rejoin + route
+  rediscovery). Nothing is silently dropped; it just waits.
+* Root cause of the slow part: a resume after reset keeps the stored short
+  address but the firmware never announced it, so the coordinator only
+  rediscovered the route after its writes started failing.
 
-```
-zh:zstack: Data confirm error (0x9c139efffecb054c:5338,240,3)
-zh:zstack: Request network address of '0x9c139efffecb054c'
-```
+**Fix (done).** `announce_task` broadcasts `Device_annce` three times right after
+joining. Measured effect: first command after a reset moved from 12.9 s to
+11.5 s and no expired transactions appeared in the window.
 
-**Why it matters.** This is the only failure that makes Home Assistant control
-feel broken while the RF side is perfectly fine. Everything else in this file is
-cosmetic next to it.
+**Left to consider.**
 
-**What we know.**
-
-* The device is a sleepy end device: `CapabilityInformation(0x80)` (allocate
-  address, **rx-off-when-idle**), poll interval 100 ms (`TimingConfig`).
-  `0x88` (rx-on-when-idle) was tried earlier and produced `MacError(NoData)`, so
-  the stack was reverted to polling.
-* The device is mains powered (USB), so sleeping is a choice, not a necessity.
-* After a rejoin the coordinator's cached short address goes stale; the log line
-  `Request network address of ...` right after the failure is that recovery.
-  Every flash/reset during development triggered it, but the user also sees
-  stale/late commands in normal use.
-* RSSI around −77..−81 dBm, LQI 222..225 — usable but not great, and the device
-  sits inside a cabinet of hardware.
-* Each RF command keeps the CC1101 busy for ~400 ms (8 frames × 39 ms + gaps).
-  In async mode the loop yields between edges, so the stack can poll, but the
-  main loop is still spending 400 ms per command on RF.
-
-**Things to try, cheapest first.**
-
-1. Measure it: publish N speed commands (e.g. 50, one per second) with a unique
-   fan, count successes/latencies/`MAC_TRANSACTION_EXPIRED` in the Z2M log.
-   Do it with the device untouched (no flashing) and again while it is
-   transmitting RF, to separate "stale address after rejoin" from "busy
-   device".
-2. Poll faster (`TimingConfig { poll_interval_ms: 50 }`) and see whether the
-   expiry rate changes.
-3. Try `rx-on-when-idle` again (`0x88`) now that the stack has moved on — if the
-   `MacError(NoData)` is gone, a mains-powered device should simply stay awake.
-4. Check the parent: `database.db` has the parent address; if it is a weak
-   router, force a rejoin near the coordinator and compare.
-5. If the stale-address recovery is the dominant failure: make the device send a
-   `Device_annce` after every rejoin (it should already) and check when it
-   doesn't.
-
-**Done when.** 100 sequential commands from Home Assistant all apply within a
-second or two, with no expired transactions in the Z2M log.
-
----
+* Boot-to-joined is ~6 s; the expensive part is radio bring-up/calibration, not
+  something the application can skip.
+* If slow rejoin becomes a problem again, poll faster (`poll_interval_ms`) or
+  revisit `rx-on-when-idle` (`0x88`) now that the stack has moved on — the older
+  `MacError(NoData)` may be gone, and this device is mains powered anyway.
 
 ## 2. Console commands do not update the stored state — **S**
 

@@ -2378,6 +2378,25 @@ fn stack_config(endpoints: &'static [EndpointDescriptor<'static>]) -> StackConfi
     )
 }
 
+/// Announce the device once it is on the network.
+///
+/// A resume after a reset keeps the stored short address but does not announce
+/// it, so a coordinator that lost the route only rediscovers it after its writes
+/// fail (Zigbee2MQTT logs `MAC_TRANSACTION_EXPIRED`, then does a `nwkAddrReq`).
+/// Three quick broadcasts right after joining close that gap; they are cheap and
+/// harmless when the coordinator already knows us.
+#[embassy_executor::task]
+async fn announce_task(stack: &'static ZbStack) {
+    stack.wait_until_joined().await;
+    for _ in 0..3 {
+        match stack.device().announce_self().await {
+            Ok(()) => println!("zigbee: announced"),
+            Err(e) => println!("zigbee: announce failed: {e:?}"),
+        }
+        Timer::after_millis(400).await;
+    }
+}
+
 #[embassy_executor::task]
 async fn stack_task(stack: &'static ZbStack) {
     let outcome = stack.run(AsyncDelay).await;
@@ -2478,6 +2497,7 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
     let stack: &'static ZbStack = STACK.init(zigbee::Stack::new(mac, stack_config(endpoints), Chain, storage));
 
     spawner.spawn(stack_task(stack).expect("spawn stack_task"));
+    spawner.spawn(announce_task(stack).expect("spawn announce_task"));
 
     let mut console = Console::new(UsbSerialJtag::new(peripherals.USB_DEVICE));
     console.outln("fan-bridge ready - type 'help'");
