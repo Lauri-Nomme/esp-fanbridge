@@ -14,7 +14,8 @@ the fan — and pairing/state survives reboots.
 * Device: sleepy end device, ZCL `Fan Control (0x0202)` per learned remote
 
 Design notes and the full reverse-engineering story: [`docs/DESIGN.md`](docs/DESIGN.md)
-and [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
+and [`docs/PROTOCOL.md`](docs/PROTOCOL.md). How the PWM waveform is turned into a
+bitstream the CC1101 can send by itself: [`docs/PACKET-TX.md`](docs/PACKET-TX.md).
 
 ## Build and flash
 
@@ -56,6 +57,7 @@ sudo minicom -D /dev/ttyACM0 -b 115200      # Ctrl-A W to wrap, Ctrl-A X to exit
 | `desc` | the endpoint descriptors this device advertises (what Z2M will read) |
 | `debug` | toggle the noisy `junk:` diagnostics |
 | `clock` | route the CC1101's XOSC/192 clock to GDO0 — a **pin self-test**: if `raw` in `stat` explodes, the GDO0 wiring is good |
+| `txmode [packet\|async]` | show or switch how frames are transmitted (packet = the radio sends the bitstream, see [`docs/PACKET-TX.md`](docs/PACKET-TX.md)) |
 
 ## Zigbee model (what Home Assistant sees)
 

@@ -102,6 +102,9 @@ const IOCFG2: u8 = 0x00;
 const IOCFG0: u8 = 0x02;
 const FIFOTHR: u8 = 0x03;
 const PKTCTRL1: u8 = 0x07;
+const PKTLEN: u8 = 0x06;
+const SFTX: u8 = 0x3B;
+const SCAL: u8 = 0x33;
 const PKTCTRL0: u8 = 0x08;
 const FSCTRL1: u8 = 0x0B;
 const FREQ2: u8 = 0x0D;
@@ -559,6 +562,20 @@ static PAIRING_REPORT: AtomicBool = AtomicBool::new(false);
 static PAIRED_NOW: AtomicU32 = AtomicU32::new(0);
 /// Exposed (endpoint-bearing) count last reported.
 static EXPOSED_NOW: AtomicU32 = AtomicU32::new(0);
+/// `true` = packet-mode transmit (radio sends the bitstream), `false` = the
+/// per-edge bit-bang path. Off by default until the expanded stream has been
+/// confirmed against the physical fans; `txmode packet` switches at runtime.
+static TX_PACKET: AtomicBool = AtomicBool::new(false);
+/// Experiment hooks: modulation format / PA index / PATABLE used for packet TX.
+static PKT_MDMCFG2: AtomicU32 = AtomicU32::new(0x30);
+static PKT_FREND0: AtomicU32 = AtomicU32::new(0x11);
+static PKT_PATABLE: AtomicU32 = AtomicU32::new(0x00C0); // low byte = index 1
+/// Frames sent per command and the silence between them. The remotes send only
+/// a few frames but with a long gap, which a picky receiver may need.
+static TX_REPEATS: AtomicU32 = AtomicU32::new(REPEATS);
+static TX_GAP_MS: AtomicU32 = AtomicU32::new(FRAME_GAP_MS);
+/// Set to `0x100 | byte` to transmit one FIFO filled with that byte.
+static PKT_FILL: AtomicU32 = AtomicU32::new(0);
 /// opt-in noisy diagnostics
 static DEBUG_ON: AtomicBool = AtomicBool::new(false);
 /// counts every raw level change on GDO0, including sub-noise glitches
@@ -647,7 +664,7 @@ async fn send_code(
     // accuracy-wise. It matters: the whole frame takes ~400 ms, and busy-waiting
     // through it starved the Zigbee task, which then timed out its transmissions
     // (`MLME tx-done timeout`) after every command that also drove the fan.
-    for _ in 0..REPEATS {
+    for _ in 0..TX_REPEATS.load(Ordering::Relaxed) {
         for i in (0..24).rev() {
             if (code >> i) & 1 == 1 {
                 gdo0.set_high();
@@ -664,13 +681,149 @@ async fn send_code(
         gdo0.set_high();
         Timer::after_micros(u64::from(T_SHORT)).await;
         gdo0.set_low();
-        Timer::after_millis(u64::from(FRAME_GAP_MS)).await;
+        Timer::after_millis(u64::from(TX_GAP_MS.load(Ordering::Relaxed))).await;
     }
 
     // back to receive
     gdo0.set_output_enable(false);
     gdo0.set_input_enable(true);
     enter_rx(spi, cs);
+}
+
+// ------------------------------------------------------- packet-mode transmit
+//
+// The remote protocol is pulse-width coded: a `0` is 400 us high + 1200 us low,
+// a `1` is 1200 us high + 400 us low. The CC1101 can not emit that itself, but
+// it *can* emit an arbitrary NRZ bitstream from its TX FIFO. Sampling the PWM
+// waveform on a 100 us grid turns every symbol into 16 plain bits (4 on + 12
+// off, or 12 on + 4 off), so the whole frame becomes 49 ordinary bytes that the
+// radio clocks out on its own. See docs/PACKET-TX.md.
+
+/// Bit period of the expanded stream: 100 us, so 400/1200 us pulses are exactly
+/// 4/12 bits and the on-air timing matches the bit-banged version.
+const TX_BIT_US: u32 = 100;
+/// 24 symbols * 16 bits + the 4-bit trailing pulse, padded to whole bytes.
+const TX_PACKET_LEN: u8 = 49;
+/// Data rate for 100 us per bit (26 MHz crystal): 403 * 256 * 26e6 / 2^28.
+const TX_DRATE_E: u8 = 8;
+const TX_DRATE_M: u8 = 147;
+
+/// Registers for packet transmission: OOK, no preamble/sync, fixed length,
+/// no CRC, no whitening.
+const PKT_TX_REGS: &[(u8, u8)] = &[
+    (PKTCTRL1, 0x00),
+    (PKTCTRL0, 0x00),
+    (PKTLEN, TX_PACKET_LEN),
+    (MDMCFG4, 0x80 | TX_DRATE_E),
+    (MDMCFG3, TX_DRATE_M),
+    // MDMCFG2: MOD_FORMAT[6:4] = 011 (ASK/OOK), MANCHESTER_EN[3] = 0,
+    // SYNC_MODE[2:0] = 000 (no preamble/sync). 0x02 here would mean 2-FSK.
+    (MDMCFG2, 0x30),
+];
+
+/// Registers to put the radio back into asynchronous serial mode for RX.
+const ASYNC_RX_REGS: &[(u8, u8)] = &[
+    (PKTCTRL1, 0x04),
+    (PKTCTRL0, 0x32),
+    (PKTLEN, 0xFF),
+    (MDMCFG4, 0x87),
+    (MDMCFG3, 0x83),
+    (MDMCFG2, 0x30),
+];
+
+/// Set one bit of a big-endian bit buffer.
+fn put_bit(out: &mut [u8], pos: &mut usize, one: bool) {
+    if one {
+        out[*pos / 8] |= 1 << (7 - *pos % 8);
+    }
+    *pos += 1;
+}
+
+/// Expand a 24-bit remote code into the NRZ bitstream the radio can send.
+fn expand_code(code: u32) -> [u8; TX_PACKET_LEN as usize] {
+    let mut out = [0u8; TX_PACKET_LEN as usize];
+    let mut pos = 0usize;
+    for i in (0..24).rev() {
+        // 0 -> 400 us high + 1200 us low = 4 on + 12 off
+        // 1 -> 1200 us high + 400 us low = 12 on + 4 off
+        let (high, low) = if (code >> i) & 1 == 1 { (12, 4) } else { (4, 12) };
+        for _ in 0..high {
+            put_bit(&mut out, &mut pos, true);
+        }
+        for _ in 0..low {
+            put_bit(&mut out, &mut pos, false);
+        }
+    }
+    // the remote ends a frame with one short pulse
+    for _ in 0..4 {
+        put_bit(&mut out, &mut pos, true);
+    }
+    out
+}
+
+fn apply_regs(spi: &mut Spi<'_, esp_hal::Blocking>, cs: &mut Output<'_>, regs: &[(u8, u8)]) {
+    for &(a, v) in regs {
+        wreg(spi, cs, a, v);
+    }
+}
+
+/// Transmit `code` eight times using the radio's own packet engine.
+///
+/// Returns how long the whole burst took, for the debug log.
+async fn send_code_packet(
+    spi: &mut Spi<'_, esp_hal::Blocking>,
+    cs: &mut Output<'_>,
+    code: u32,
+) -> u32 {
+    let frame = expand_code(code);
+    // +1: the first STX after the async→packet switch does not go out
+    send_packet_frame(spi, cs, &frame, REPEATS + 1).await
+}
+
+/// Enter packet mode, send `frame` `repeats` times, restore async RX.
+async fn send_packet_frame(
+    spi: &mut Spi<'_, esp_hal::Blocking>,
+    cs: &mut Output<'_>,
+    frame: &[u8],
+    repeats: u32,
+) -> u32 {
+    strobe(spi, cs, SIDLE);
+    apply_regs(spi, cs, PKT_TX_REGS);
+    wreg(spi, cs, IOCFG0, 0x06); // GDO0 = "packet transmitted" (unused, kept sane)
+    write_patable(spi, cs, [0x00, 0xC0]);
+    // Recalibrate after changing the modem configuration; the first STX after
+    // the switch is otherwise dropped, so one extra frame is sent below.
+    strobe(spi, cs, SCAL);
+    Timer::after_millis(1).await;
+
+
+    let start = Instant::now();
+    for _ in 0..repeats {
+        strobe(spi, cs, SFTX);
+        cs.set_low();
+        let header = [WRITE_BURST | 0x3F];
+        let _ = spi.write(&header);
+        let _ = spi.write(frame);
+        cs.set_high();
+        strobe(spi, cs, STX);
+        Timer::after_millis(1).await;
+
+        // 49 bytes at ~10 kbaud is ~39 ms; wait it out, then make sure the
+        // state machine really returned to idle before touching the FIFO again
+        Timer::after_millis(40).await;
+        let poll = Instant::now();
+        while rstat(spi, cs, 0x35) & 0x1F != 0x01 && poll.elapsed().as_millis() < 50 {
+            Timer::after_millis(1).await;
+        }
+        Timer::after_millis(u64::from(TX_GAP_MS.load(Ordering::Relaxed))).await;
+    }
+    let elapsed = start.elapsed().as_millis() as u32;
+
+    strobe(spi, cs, SIDLE);
+    apply_regs(spi, cs, ASYNC_RX_REGS);
+    wreg(spi, cs, IOCFG0, 0x0D);
+    enter_rx(spi, cs);
+    elapsed
 }
 
 // ------------------------------------------------------------------ decoding
@@ -933,6 +1086,8 @@ fn handle_command(c: &mut Console<'_>, line: &str) {
             c.outln("  save                 force save config");
             c.outln("  name [text]          show or set the device name");
             c.outln("  name <slot> [text]   show or set a fan name");
+            c.outln("  txmode [packet|async] show or switch how frames are transmitted");
+            c.outln("  repeats [n]          frames per command (and show gap)");
             c.outln("  reboot               restart (needed after pair/del: the endpoint set is fixed at boot)");
         }
         "list" => print_list(c),
@@ -1141,6 +1296,57 @@ fn handle_command(c: &mut Console<'_>, line: &str) {
                 w.pos
             };
             c.outln(core::str::from_utf8(&b[..pos]).unwrap_or(""));
+        }
+        "repeats" => {
+            match it.next().and_then(|v| v.parse::<u32>().ok()) {
+                Some(n) if n > 0 && n <= 64 => {
+                    TX_REPEATS.store(n, Ordering::Relaxed);
+                    c.outln("repeats set");
+                }
+                _ => {
+                    let mut b = [0u8; 64];
+                    let pos = {
+                        let mut w = Writer { buf: &mut b, pos: 0 };
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut w,
+                            format_args!(
+                                "repeats={} gap={}ms",
+                                TX_REPEATS.load(Ordering::Relaxed),
+                                TX_GAP_MS.load(Ordering::Relaxed)
+                            ),
+                        );
+                        w.pos
+                    };
+                    c.outln(core::str::from_utf8(&b[..pos]).unwrap_or(""));
+                }
+            }
+        }
+        "gap" => {
+            match it.next().and_then(|v| v.parse::<u32>().ok()) {
+                Some(ms) if ms <= 2000 => {
+                    TX_GAP_MS.store(ms, Ordering::Relaxed);
+                    c.outln("gap set");
+                }
+                _ => c.outln("usage: gap <ms>"),
+            }
+        }
+        "txmode" => {
+            match it.next() {
+                Some("packet") => {
+                    TX_PACKET.store(true, Ordering::Relaxed);
+                    c.outln("tx mode: packet (radio sends the expanded bitstream)");
+                }
+                Some("async") => {
+                    TX_PACKET.store(false, Ordering::Relaxed);
+                    c.outln("tx mode: async (firmware drives GDO0 per edge)");
+                }
+                None => c.outln(if TX_PACKET.load(Ordering::Relaxed) {
+                    "tx mode: packet (radio sends the expanded bitstream)"
+                } else {
+                    "tx mode: async (firmware drives GDO0 per edge)"
+                }),
+                Some(_) => c.outln("usage: txmode [packet|async]"),
+            }
         }
         "reboot" => {
             c.outln("rebooting...");
@@ -2285,6 +2491,7 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
     let mut last_ms: u64 = 0;
     let mut led_blink = 0u32;
     let mut last_report_ms: u64 = 0;
+    let mut last_rx_check_ms: u64 = 0;
     let mut linebuf = [0u8; 80];
     let mut clock_on = false;
     let mut raw_prev = gdo0.is_high();
@@ -2296,8 +2503,36 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
             handle_command(&mut console, s);
         }
 
-        // ---- pairing status: publish it when it changes
         let now_ms = t0.elapsed().as_millis();
+
+        // ---- RX watchdog: the radio can end up in IDLE (after a burst, an
+        // underflow or an RX termination) and then silently misses everything.
+        // Re-arm it whenever it is not actually receiving.
+        if now_ms.saturating_sub(last_rx_check_ms) > 500 {
+            last_rx_check_ms = now_ms;
+            let marc = rstat(&mut spi, &mut cs, 0x35) & 0x1F;
+            if marc != 0x0D {
+                if DEBUG_ON.load(Ordering::Relaxed) {
+                    let mut b = [0u8; 64];
+                    let pos = {
+                        let mut w = Writer { buf: &mut b, pos: 0 };
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut w,
+                            format_args!("rx rearm (marcstate=0x{marc:02x})"),
+                        );
+                        w.pos
+                    };
+                    let t = core::str::from_utf8(&b[..pos]).unwrap_or("");
+                    console.outln(t);
+                }
+                enter_rx(&mut spi, &mut cs);
+                logical = gdo0.is_high();
+                seg_start = Instant::now();
+                n = 0;
+            }
+        }
+
+        // ---- pairing status: publish it when it changes
         {
             let (stage, count, exposed) = STATE.lock(|s| {
                 let st = s.borrow();
@@ -2337,7 +2572,28 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
         let req = TX_REQ.swap(0, Ordering::Relaxed);
         if req != 0 {
             let code = req & 0x00FF_FFFF;
-            send_code(&mut spi, &mut cs, &mut gdo0, code).await;
+            let took = if TX_PACKET.load(Ordering::Relaxed) {
+                send_code_packet(&mut spi, &mut cs, code).await
+            } else {
+                send_code(&mut spi, &mut cs, &mut gdo0, code).await;
+                0
+            };
+            if DEBUG_ON.load(Ordering::Relaxed) {
+                let mut b = [0u8; 80];
+                let pos = {
+                    let mut w = Writer80 { buf: &mut b, pos: 0 };
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut w,
+                        format_args!(
+                            "tx 0x{code:06X} via {} took {took} ms",
+                            if TX_PACKET.load(Ordering::Relaxed) { "packet" } else { "bit-bang" }
+                        ),
+                    );
+                    w.pos
+                };
+                let t = core::str::from_utf8(&b[..pos]).unwrap_or("");
+                console.outln(t);
+            }
             logical = gdo0.is_high();
             seg_start = Instant::now();
             n = 0;
