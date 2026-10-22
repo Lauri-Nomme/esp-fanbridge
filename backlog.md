@@ -219,7 +219,7 @@ Related: the console `power <slot> on` already re-sends the last speed, which is
 the same idea one layer down.
 
 
-### 13. Report fan/switch/direction changes — **M, probably the most valuable**
+### 13. Report fan/switch/direction changes — **done and verified from RF**
 
 Right now **only the pairing cluster sends attribute reports**. A press on a
 physical remote changes the device's state, but nothing tells the coordinator:
@@ -232,7 +232,16 @@ Fix: send `Report Attributes` on change for `FanMode` (per fan endpoint),
 the Zigbee writes. `send_pairing_report` already shows the pattern; generalise it
 (bitmask of dirty endpoints + the existing retry loop).
 
-Verify: press speed 2 on a remote → HA shows speed 2 within a second, no polling.
+Verified from the air (a second C6+CC1101 replaying real remote codes):
+
+```
+device:  rx device=0x191D0 button=0xC code=0x191D0C
+z2m:     speed_2: 3, state_2: ON
+device:  rx device=0x191D0 button=0x4 code=0x191D04
+z2m:     direction_2: out
+```
+
+No Zigbee write involved - the updates came only from the device's reports.
 
 ### 14. Publish the full state after (re)join — **S**
 
