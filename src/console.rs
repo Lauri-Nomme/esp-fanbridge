@@ -184,6 +184,7 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
             c.outln("  txmode [packet|async] show or switch how frames are transmitted");
             c.outln("  repeats [n]          frames per command (and show gap)");
             c.outln("  slots                raw dump of all eight slots");
+            c.outln("  identify <secs>      blink the LED like the coordinator's identify");
             c.outln("  reboot               restart (needed after pair/del: the endpoint set is fixed at boot)");
         }
         "list" => print_list(c),
@@ -506,6 +507,20 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
                     "tx mode: async (firmware drives GDO0 per edge)"
                 }),
                 Some(_) => c.outln("usage: txmode [packet|async]"),
+            }
+        }
+        "identify" => {
+            // start the same identification a coordinator can request
+            match it.next().and_then(|v| v.parse::<u16>().ok()) {
+                Some(secs) if secs > 0 && secs <= 300 => {
+                    IDENTIFY.set_identify_time(secs);
+                    c.outln("identifying (LED blinks fast)");
+                }
+                Some(0) => {
+                    IDENTIFY.set_identify_time(0);
+                    c.outln("identify stopped");
+                }
+                _ => c.outln("usage: identify <seconds> (0 stops)"),
             }
         }
         "reboot" => {

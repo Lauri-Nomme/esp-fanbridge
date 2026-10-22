@@ -40,6 +40,7 @@ use esp_println::println;
 
 mod config;
 mod console;
+mod led;
 mod pairing;
 mod radio;
 mod state;
@@ -93,7 +94,7 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
     gdo0.set_output_enable(false);
     gdo0.set_input_enable(true);
 
-    let mut led = Output::new(peripherals.GPIO15, Level::Low, OutputConfig::default());
+    let mut status_led = Output::new(peripherals.GPIO15, Level::Low, OutputConfig::default());
 
     let cfg = load_config();
     let paired = cfg.slots.iter().filter(|s| s.used()).count();
@@ -131,7 +132,7 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
     let mut seg_start = Instant::now();
     let mut last_code: Option<u32> = None;
     let mut last_ms: u64 = 0;
-    let mut led_blink = 0u32;
+    let mut last_identify_tick_ms: u64 = 0;
     let mut last_rx_check_ms: u64 = 0;
     // set when a pairing changed the endpoint set and a restart is scheduled
     let mut restart_at_ms: Option<u64> = None;
@@ -397,15 +398,21 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
             }
         }
 
-        // ---- LED: heartbeat / pairing indicator
-        led_blink = led_blink.wrapping_add(1);
-        let pairing = STATE.lock(|s| s.borrow().pairing);
-        let on = if pairing {
-            (led_blink / 4000) % 2 == 0 // fast blink while pairing
+        // ---- LED: heartbeat, pairing, learned/failed, identify
+        if now_ms.saturating_sub(last_identify_tick_ms) >= 1_000 {
+            last_identify_tick_ms = now_ms;
+            IDENTIFY.tick(1);
+        }
+        let (stage, pairing) = STATE.lock(|s| {
+            let st = s.borrow();
+            (st.stage_at(now_ms), st.pairing)
+        });
+        let pattern = led::pattern(stage, pairing, IDENTIFY.is_identifying());
+        status_led.set_level(if led::is_on(pattern, now_ms) {
+            Level::High
         } else {
-            (led_blink / 40_000) % 2 == 0 // slow heartbeat
-        };
-        led.set_level(if on { Level::High } else { Level::Low });
+            Level::Low
+        });
 
         if n == 0 {
             Timer::after_micros(30).await;
