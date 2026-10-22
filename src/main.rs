@@ -2691,6 +2691,8 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
     let mut last_ms: u64 = 0;
     let mut led_blink = 0u32;
     let mut last_rx_check_ms: u64 = 0;
+    // set when a pairing changed the endpoint set and a restart is scheduled
+    let mut restart_at_ms: Option<u64> = None;
     let mut linebuf = [0u8; 80];
     let mut clock_on = false;
     let mut raw_prev = gdo0.is_high();
@@ -2882,7 +2884,11 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
                     match on_frame(addr, button, now) {
                         Ev::Paired(a, i) => {
                             console.outln(fmt2(&mut linebuf, a, i as u32));
-                            console.outln("reboot (or re-interview in Zigbee2MQTT) to expose the new endpoint");
+                            // The endpoint table is built at boot, so a remote
+                            // learned now has no endpoint until a restart. Do it
+                            // automatically instead of asking the user to.
+                            console.outln("restarting in 3 s to expose the new endpoint");
+                            restart_at_ms = Some(now + 3_000);
                         }
                         Ev::NoSlot(a) => {
                             console.outln(fmt2(&mut linebuf, a, 99));
@@ -2904,6 +2910,14 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
                 }
             }
             n = 0;
+        }
+
+        // ---- apply a pending endpoint change
+        if let Some(at) = restart_at_ms {
+            if t0.elapsed().as_millis() >= at {
+                console.outln("restarting...");
+                esp_hal::system::software_reset();
+            }
         }
 
         // ---- LED: heartbeat / pairing indicator
