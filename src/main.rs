@@ -587,6 +587,12 @@ static PAIRING_REPORT: AtomicBool = AtomicBool::new(false);
 static PAIRED_NOW: AtomicU32 = AtomicU32::new(0);
 /// Exposed (endpoint-bearing) count last reported.
 static EXPOSED_NOW: AtomicU32 = AtomicU32::new(0);
+/// Counters for the `status` command.
+static TX_COUNT: AtomicU32 = AtomicU32::new(0);
+static RX_COUNT: AtomicU32 = AtomicU32::new(0);
+static REARM_COUNT: AtomicU32 = AtomicU32::new(0);
+static UPTIME_MS: AtomicU32 = AtomicU32::new(0);
+
 /// `true` = packet-mode transmit (radio sends the bitstream), `false` = the
 /// per-edge bit-bang path. Off by default until the expanded stream has been
 /// confirmed against the physical fans; `txmode packet` switches at runtime.
@@ -1104,6 +1110,7 @@ fn handle_command(c: &mut Console<'_>, line: &str) {
             c.outln("  dir <slot> <in|out|auto>  send a direction command");
             c.outln("  power <slot> <on|off>");
             c.outln("  raw <hex>            transmit a raw 24-bit code");
+            c.outln("  status               uptime, counters, mode, frequency");
             c.outln("  stat                 chip state + RSSI");
             c.outln("  debug [on|off]       noisy diagnostics (no argument: show state)");
             c.outln("  desc                 show the advertised endpoint descriptors");
@@ -1283,6 +1290,28 @@ fn handle_command(c: &mut Console<'_>, line: &str) {
                 let t = core::str::from_utf8(&b).unwrap_or("");
                 c.outln(t);
             }
+        }
+        "status" => {
+            let mut b = [0u8; 96];
+            let pos = {
+                let mut w = Writer96 { buf: &mut b, pos: 0 };
+                let _ = core::fmt::Write::write_fmt(
+                    &mut w,
+                    format_args!(
+                        "up {}s | tx {} | rx {} | rearm {} | {} | {} kHz | debug {} | pairing {}",
+                        UPTIME_MS.load(Ordering::Relaxed) / 1000,
+                        TX_COUNT.load(Ordering::Relaxed),
+                        RX_COUNT.load(Ordering::Relaxed),
+                        REARM_COUNT.load(Ordering::Relaxed),
+                        if TX_PACKET.load(Ordering::Relaxed) { "packet" } else { "async" },
+                        FREQ_KHZ,
+                        if DEBUG_ON.load(Ordering::Relaxed) { "on" } else { "off" },
+                        if STATE.lock(|s| s.borrow().pairing) { "on" } else { "off" },
+                    ),
+                );
+                w.pos
+            };
+            c.outln(core::str::from_utf8(&b[..pos]).unwrap_or(""));
         }
         "stat" => {
             STAT_REQ.store(true, Ordering::Relaxed);
@@ -2717,6 +2746,7 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
         }
 
         let now_ms = t0.elapsed().as_millis();
+        UPTIME_MS.store(now_ms as u32, Ordering::Relaxed);
 
         // ---- RX watchdog: the radio can end up in IDLE (after a burst, an
         // underflow or an RX termination) and then silently misses everything.
@@ -2739,6 +2769,7 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
                     console.outln(t);
                 }
                 enter_rx(&mut spi, &mut cs);
+                REARM_COUNT.fetch_add(1, Ordering::Relaxed);
                 logical = gdo0.is_high();
                 seg_start = Instant::now();
                 n = 0;
@@ -2779,6 +2810,7 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
         let req = TX_REQ.swap(0, Ordering::Relaxed);
         if req != 0 {
             let code = req & 0x00FF_FFFF;
+            TX_COUNT.fetch_add(1, Ordering::Relaxed);
             let took = if TX_PACKET.load(Ordering::Relaxed) {
                 send_code_packet(&mut spi, &mut cs, code).await
             } else {
@@ -2894,6 +2926,7 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
                     let button = (bits & 0xF) as u8;
                     // the level the remote arrived at: the first thing to look
                     // at when presses start going missing
+                    RX_COUNT.fetch_add(1, Ordering::Relaxed);
                     let rssi = rssi_dbm(rstat(&mut spi, &mut cs, 0x34));
                     console.outln(fmt_rx(&mut linebuf, addr, button, bits, rssi));
                     match on_frame(addr, button, now) {
