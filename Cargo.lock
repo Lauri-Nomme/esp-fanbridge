@@ -773,6 +773,7 @@ dependencies = [
  "esp-alloc",
  "esp-backtrace",
  "esp-bootloader-esp-idf",
+ "esp-fanbridge-protocol",
  "esp-hal",
  "esp-println",
  "esp-radio",
@@ -785,6 +786,10 @@ dependencies = [
  "zigbee-mac",
  "zigbee-types",
 ]
+
+[[package]]
+name = "esp-fanbridge-protocol"
+version = "0.1.0"
 
 [[package]]
 name = "esp-hal"

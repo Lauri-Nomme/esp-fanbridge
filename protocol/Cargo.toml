@@ -1,0 +1,10 @@
+[package]
+name = "esp-fanbridge-protocol"
+version = "0.1.0"
+edition = "2024"
+description = "Pulse-width coded 433 MHz fan-remote protocol: decoding, packet-mode expansion and the persistent config format"
+license = "MIT OR Apache-2.0"
+
+# Deliberately dependency-free and no_std: everything here is pure logic, so it
+# runs in the firmware *and* under `cargo test` on a workstation.
+[dependencies]

@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  protocol:
+    name: protocol tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+      # The decoder, the packet-mode expansion and the frame boundaries are pure
+      # logic; these are the tests that catch a regression without hardware.
+      - name: Test
+        run: ./protocol/run-tests.sh
+
+  firmware:
+    name: firmware build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the ESP32-C6 toolchain
+        run: |
+          rustup toolchain install nightly --profile minimal \
+            --component rust-src --target riscv32imac-unknown-none-elf
+      - name: Build
+        run: cargo build --release

@@ -17,6 +17,20 @@ Design notes and the full reverse-engineering story: [`docs/DESIGN.md`](docs/DES
 and [`docs/PROTOCOL.md`](docs/PROTOCOL.md). How the PWM waveform is turned into a
 bitstream the CC1101 can send by itself: [`docs/PACKET-TX.md`](docs/PACKET-TX.md).
 
+## Tests
+
+The protocol logic (frame decoder, packet-mode expansion, timing bounds) lives in
+`protocol/`, a dependency-free `no_std` crate, so it can be tested on a
+workstation:
+
+```sh
+./protocol/run-tests.sh
+```
+
+(The wrapper runs cargo from outside the tree on purpose: the firmware's
+`.cargo/config.toml` targets the ESP32 and builds `core`/`alloc` from source,
+which breaks a host test run.) CI runs these tests plus a firmware build.
+
 ## Build and flash
 
 ```sh
