@@ -196,6 +196,29 @@ session.
 
 ## State visibility
 
+### 41. Retain speed and direction while the fan is off — **S/M**
+
+Today a powered-down fan loses its speed in Home Assistant: `FanMode` reports
+`Off`, the converter maps that to speed 0, and the slider snaps to 0%. The device
+itself still remembers the slot's speed and direction in its config, so turning
+the fan back on restores them on the wire - it is the *reported* state that
+forgets.
+
+Options, to discuss:
+
+* report the last non-zero speed alongside `state: OFF` (HA then shows "off but
+  33%", which is how most MQTT fans behave), at the cost of a second value to
+  keep in sync
+* keep the `Off`/0 mapping and accept that the UI forgets: simpler, matches the
+  ZCL model where `Off` *is* the mode
+* if the physical fans also forget their direction when unpowered, re-assert
+  direction (and speed) when the power command is issued, so the fan comes back
+  in the state the UI shows; needs a real fan that behaves that way to confirm
+
+Related: the console `power <slot> on` already re-sends the last speed, which is
+the same idea one layer down.
+
+
 ### 13. Report fan/switch/direction changes — **M, probably the most valuable**
 
 Right now **only the pairing cluster sends attribute reports**. A press on a
