@@ -86,6 +86,7 @@ use zigbee_cluster_library::types::ReadWrite;
 use zigbee_cluster_library::types::Reportable;
 use zigbee_cluster_library::types::TypeId;
 use zigbee_cluster_library::types::Uint8;
+use zigbee_cluster_library::types::Uint16;
 use zigbee_cluster_library::types::Enum8;
 use zigbee_cluster_library::types::ZclEnum8;
 use zigbee_cluster_library::types::strings::ShortStr;
@@ -587,6 +588,8 @@ static PAIRING_REPORT: AtomicBool = AtomicBool::new(false);
 static PAIRED_NOW: AtomicU32 = AtomicU32::new(0);
 /// Exposed (endpoint-bearing) count last reported.
 static EXPOSED_NOW: AtomicU32 = AtomicU32::new(0);
+/// Receiver re-arm count last reported.
+static REARMS_NOW: AtomicU32 = AtomicU32::new(0);
 /// Counters for the `status` command.
 static TX_COUNT: AtomicU32 = AtomicU32::new(0);
 static RX_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -1726,16 +1729,20 @@ const A_EXPOSED_COUNT: Attribute<Uint8, ReadOnly, Reportable> =
     CL_PAIRING.attribute(AttributeId(0x0002), "exposedCount");
 const A_RESTART_REQUIRED: Attribute<Bool, ReadOnly, Reportable> =
     CL_PAIRING.attribute(AttributeId(0x0003), "restartRequired");
+/// How often the receiver watchdog had to re-arm the radio (see `status`).
+const A_RX_REARM_COUNT: Attribute<Uint16, ReadOnly, Reportable> =
+    CL_PAIRING.attribute(AttributeId(0x0004), "rxRearmCount");
 static ONOFF_ATTRS: [AttrInfo; 1] = [A_ONOFF.attr_info()];
 /// Shared reporting store: enough to accept Configure Reporting from the coordinator.
 static REPORTING: ReportingTable<16> = ReportingTable::new();
 static LEVEL_ATTRS: [AttrInfo; 1] = [A_LEVEL.attr_info()];
 static FAN_ATTRS: [AttrInfo; 1] = [A_FANMODE.attr_info()];
-static PAIRING_ATTRS: [AttrInfo; 4] = [
+static PAIRING_ATTRS: [AttrInfo; 5] = [
     A_STAGE.attr_info(),
     A_PAIRED_COUNT.attr_info(),
     A_EXPOSED_COUNT.attr_info(),
     A_RESTART_REQUIRED.attr_info(),
+    A_RX_REARM_COUNT.attr_info(),
 ];
 static DIRECTION_ATTRS: [AttrInfo; 1] = [A_DIRECTION.attr_info()];
 
@@ -2116,6 +2123,11 @@ impl ClusterServer for PairingEp {
             0x0001 => A_PAIRED_COUNT.encode(Uint8(count), out, offset),
             0x0002 => A_EXPOSED_COUNT.encode(Uint8(exposed), out, offset),
             0x0003 => A_RESTART_REQUIRED.encode(restart, out, offset),
+            0x0004 => A_RX_REARM_COUNT.encode(
+                Uint16(REARM_COUNT.load(Ordering::Relaxed) as u16),
+                out,
+                offset,
+            ),
             _ => return Status::UnsupportedAttribute,
         })
     }
@@ -2637,12 +2649,14 @@ async fn send_pairing_report(stack: &ZbStack) -> bool {
         let st = s.borrow();
         (st.paired_count(), st.exposed_count())
     });
+    let rearms = REARM_COUNT.load(Ordering::Relaxed) as u16;
     let mut buf = [0u8; 32];
     let Ok(report) = AttributeReportBuilder::new(&mut buf, seq)
         .and_then(|b| b.push(&A_STAGE, stage))
         .and_then(|b| b.push(&A_PAIRED_COUNT, Uint8(count)))
         .and_then(|b| b.push(&A_EXPOSED_COUNT, Uint8(exposed)))
         .and_then(|b| b.push(&A_RESTART_REQUIRED, count != exposed))
+        .and_then(|b| b.push(&A_RX_REARM_COUNT, Uint16(rearms)))
         .and_then(AttributeReportBuilder::finish)
     else {
         return false;
@@ -2789,10 +2803,13 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
             let raw = u32::from(stage.into_raw());
             // `exposed` only changes after a reboot, but the pairing status is
             // what tells the user a restart is pending
+            let rearms = u32::from(REARM_COUNT.load(Ordering::Relaxed) as u16);
             if STAGE_NOW.load(Ordering::Relaxed) != raw
                 || PAIRED_NOW.load(Ordering::Relaxed) != count
                 || EXPOSED_NOW.load(Ordering::Relaxed) != exposed
+                || REARMS_NOW.load(Ordering::Relaxed) != rearms
             {
+                REARMS_NOW.store(rearms, Ordering::Relaxed);
                 STAGE_NOW.store(raw, Ordering::Relaxed);
                 PAIRED_NOW.store(count, Ordering::Relaxed);
                 EXPOSED_NOW.store(exposed, Ordering::Relaxed);
