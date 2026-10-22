@@ -556,6 +556,31 @@ fn zb_event(kind: u8, slot: u8, value: u8) {
     let _ = ZB_EVENTS.try_send(ZbEvent { kind, slot, value });
 }
 
+/// Pending state reports, one bit per (cluster, endpoint):
+/// bits 0..7  = FanMode of slot N
+/// bits 8..15 = direction of slot N
+/// bit 16     = pairing switch (OnOff on the master endpoint)
+static REPORT_DIRTY: AtomicU32 = AtomicU32::new(0);
+const REPORT_PAIRING_BIT: u32 = 1 << 16;
+/// The whole state, e.g. after joining so the coordinator starts in sync.
+const REPORT_ALL: u32 = 0x0001_FFFF;
+
+fn mark_fan_mode(slot: usize) {
+    REPORT_DIRTY.fetch_or(1 << slot, Ordering::Relaxed);
+}
+
+fn mark_direction(slot: usize) {
+    REPORT_DIRTY.fetch_or(1 << (8 + slot), Ordering::Relaxed);
+}
+
+fn mark_pairing_switch() {
+    REPORT_DIRTY.fetch_or(REPORT_PAIRING_BIT, Ordering::Relaxed);
+}
+
+fn mark_all_state() {
+    REPORT_DIRTY.fetch_or(REPORT_ALL, Ordering::Relaxed);
+}
+
 /// Set when the pairing status needs to be reported to the coordinator.
 static PAIRING_REPORT: AtomicBool = AtomicBool::new(false);
 /// Paired count last reported, to notice a change.
@@ -1103,6 +1128,7 @@ fn handle_command(c: &mut Console<'_>, line: &str) {
                 st.stage = Stage::Idle;
                 st.stage_until_ms = 0;
             });
+            mark_pairing_switch();
             c.outln("pairing: press SPEED 1, then 2, then 3, then 4 on the remote");
         }
         "cancel" => {
@@ -1112,6 +1138,7 @@ fn handle_command(c: &mut Console<'_>, line: &str) {
                 st.stage = Stage::Idle;
                 st.stage_until_ms = 0;
             });
+            mark_pairing_switch();
             c.outln("pairing cancelled");
         }
         "del" => {
@@ -1149,6 +1176,7 @@ fn handle_command(c: &mut Console<'_>, line: &str) {
                     });
                     if code != 0 {
                         TX_REQ.store(code | 0x8000_0000, Ordering::Relaxed);
+                        mark_fan_mode(a);
                         c.outln("sent");
                     } else {
                         c.outln("slot is empty");
@@ -1185,6 +1213,7 @@ fn handle_command(c: &mut Console<'_>, line: &str) {
                     });
                     if code != 0 {
                         TX_REQ.store(code | 0x8000_0000, Ordering::Relaxed);
+                        mark_direction(a);
                         c.outln("sent");
                     } else {
                         c.outln("slot is empty");
@@ -1220,6 +1249,7 @@ fn handle_command(c: &mut Console<'_>, line: &str) {
                     });
                     if code != 0 {
                         TX_REQ.store(code | 0x8000_0000, Ordering::Relaxed);
+                        mark_fan_mode(a);
                         c.outln("sent");
                     } else {
                         c.outln("slot is empty or already in that state");
@@ -1560,10 +1590,13 @@ fn on_frame(addr: u32, button: u8, now_ms: u64) -> Ev {
 
         // ---- normal operation: track state of a known remote
         let mut changed = false;
-        for sl in st.cfg.slots.iter_mut() {
+        for (i, sl) in st.cfg.slots.iter_mut().enumerate() {
             if sl.used() && sl.addr == addr {
                 apply_button(sl, button);
                 changed = true;
+                // the coordinator should see what the remote just did
+                mark_fan_mode(i);
+                mark_direction(i);
                 break;
             }
         }
@@ -1885,8 +1918,14 @@ impl<const EP: u8, const SLOT: i8, const KIND: u8> OnOffEp<EP, SLOT, KIND> {
             }
         }
         match KIND {
-            0 => zb_event(1, SLOT.max(0) as u8, u8::from(on)),
-            _ => zb_event(3, 0xFF, u8::from(on)),
+            0 => {
+                zb_event(1, SLOT.max(0) as u8, u8::from(on));
+                mark_fan_mode(SLOT.max(0) as usize);
+            }
+            _ => {
+                zb_event(3, 0xFF, u8::from(on));
+                mark_pairing_switch();
+            }
         }
     }
 }
@@ -2007,6 +2046,7 @@ impl<const SLOT: usize> FanEp<SLOT> {
             TX_REQ.store(code | 0x8000_0000, Ordering::Relaxed);
         }
         zb_event(0, SLOT as u8, speed);
+        mark_fan_mode(SLOT);
     }
 }
 
@@ -2104,6 +2144,7 @@ impl<const SLOT: usize> DirEp<SLOT> {
             TX_REQ.store(code | 0x8000_0000, Ordering::Relaxed);
         }
         zb_event(2, SLOT as u8, dir.as_u8());
+        mark_direction(SLOT);
     }
 }
 
@@ -2417,6 +2458,31 @@ fn stack_config(endpoints: &'static [EndpointDescriptor<'static>]) -> StackConfi
     )
 }
 
+/// Send reports from their own task.
+///
+/// A report waits for an APS acknowledgement; doing that inline in the main loop
+/// would stall RF reception and the console whenever the coordinator is slow or
+/// unreachable. Here a failed send just leaves the bit set for the next pass.
+#[embassy_executor::task]
+async fn report_task(stack: &'static ZbStack) {
+    loop {
+        if PAIRING_REPORT.load(Ordering::Relaxed) {
+            if send_pairing_report(stack).await {
+                PAIRING_REPORT.store(false, Ordering::Relaxed);
+            }
+        } else {
+            let dirty = REPORT_DIRTY.load(Ordering::Relaxed);
+            if dirty != 0 {
+                let bit = dirty.trailing_zeros();
+                if send_state_report(stack, bit).await {
+                    REPORT_DIRTY.fetch_and(!(1 << bit), Ordering::Relaxed);
+                }
+            }
+        }
+        Timer::after_millis(50).await;
+    }
+}
+
 /// Announce the device once it is on the network.
 ///
 /// A resume after a reset keeps the stored short address but does not announce
@@ -2427,6 +2493,8 @@ fn stack_config(endpoints: &'static [EndpointDescriptor<'static>]) -> StackConfi
 #[embassy_executor::task]
 async fn announce_task(stack: &'static ZbStack) {
     stack.wait_until_joined().await;
+    // the coordinator starts from defaults: give it the real state once
+    mark_all_state();
     for _ in 0..3 {
         match stack.device().announce_self().await {
             Ok(()) => println!("zigbee: announced"),
@@ -2441,6 +2509,78 @@ async fn stack_task(stack: &'static ZbStack) {
     let outcome = stack.run(AsyncDelay).await;
     println!("zigbee stack stopped: {outcome:?}");
     esp_hal::system::software_reset();
+}
+
+/// Send one pending state report (see [`REPORT_DIRTY`]).
+///
+/// Returns whether the coordinator accepted it, so a failed attempt keeps the
+/// bit set and is retried.
+async fn send_state_report(stack: &ZbStack, bit: u32) -> bool {
+    use core::sync::atomic::AtomicU8;
+    static SEQ: AtomicU8 = AtomicU8::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+    let mut buf = [0u8; 32];
+
+    let (src_endpoint, frame) = if bit < 8 {
+        let slot = bit as usize;
+        let (used, mode) = STATE.lock(|s| {
+            let st = s.borrow();
+            let sl = &st.cfg.slots[slot];
+            (sl.used(), if sl.power { mode_of_speed(sl.speed) } else { FanMode::Off })
+        });
+        if !used {
+            return true; // nothing behind this bit, drop it
+        }
+        let Ok(frame) = AttributeReportBuilder::new(&mut buf, seq)
+            .and_then(|b| b.push(&A_FANMODE, mode))
+            .and_then(AttributeReportBuilder::finish)
+        else {
+            return false;
+        };
+        (EP_FAN0 + slot as u8, frame)
+    } else if bit < 16 {
+        let slot = (bit - 8) as usize;
+        let (used, dir) = STATE.lock(|s| {
+            let st = s.borrow();
+            (st.cfg.slots[slot].used(), Direction::from_u8(st.cfg.slots[slot].dir))
+        });
+        if !used {
+            return true;
+        }
+        let Ok(frame) = AttributeReportBuilder::new(&mut buf, seq)
+            .and_then(|b| b.push(&A_DIRECTION, dir))
+            .and_then(AttributeReportBuilder::finish)
+        else {
+            return false;
+        };
+        (EP_FAN0 + slot as u8, frame)
+    } else {
+        let pairing = STATE.lock(|s| s.borrow().pairing);
+        let Ok(frame) = AttributeReportBuilder::new(&mut buf, seq)
+            .and_then(|b| b.push(&A_ONOFF, pairing))
+            .and_then(AttributeReportBuilder::finish)
+        else {
+            return false;
+        };
+        (EP_MASTER, frame)
+    };
+
+    matches!(
+        stack
+            .device()
+            .send_attribute_report(
+                ZclReportTarget {
+                    dst_short: 0,
+                    src_endpoint,
+                    dst_endpoint: 1,
+                    profile_id: profile::HOME_AUTOMATION,
+                },
+                frame,
+                &mut AsyncDelay,
+            )
+            .await,
+        Ok(confirm) if confirm.status == zigbee::aps::apsde::ApsdeSapConfirmStatus::Success
+    )
 }
 
 /// Send the pairing stage + paired count to the coordinator.
@@ -2537,6 +2677,7 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
 
     spawner.spawn(stack_task(stack).expect("spawn stack_task"));
     spawner.spawn(announce_task(stack).expect("spawn announce_task"));
+    spawner.spawn(report_task(stack).expect("spawn report_task"));
 
     let mut console = Console::new(UsbSerialJtag::new(peripherals.USB_DEVICE));
     console.outln("fan-bridge ready - type 'help'");
@@ -2549,7 +2690,6 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
     let mut last_code: Option<u32> = None;
     let mut last_ms: u64 = 0;
     let mut led_blink = 0u32;
-    let mut last_report_ms: u64 = 0;
     let mut last_rx_check_ms: u64 = 0;
     let mut linebuf = [0u8; 80];
     let mut clock_on = false;
@@ -2612,12 +2752,6 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
                 PAIRED_NOW.store(count, Ordering::Relaxed);
                 EXPOSED_NOW.store(exposed, Ordering::Relaxed);
                 PAIRING_REPORT.store(true, Ordering::Relaxed);
-            }
-        }
-        if PAIRING_REPORT.load(Ordering::Relaxed) && now_ms.saturating_sub(last_report_ms) > 2_000 {
-            last_report_ms = now_ms;
-            if send_pairing_report(stack).await {
-                PAIRING_REPORT.store(false, Ordering::Relaxed);
             }
         }
 
