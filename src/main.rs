@@ -204,9 +204,9 @@ const CC1101_CONFIG: &[(u8, u8)] = &[
     (FOCCFG, 0x16),
     (BSCFG, 0x6C),
     (AGCCTRL2, 0x03),
-    (AGCCTRL1, 0x40),
+    (AGCCTRL1, 0x00),  // DN022: OOK wants 0x00, not the FSK default 0x40
     (AGCCTRL0, 0x91),
-    (FREND1, 0x56),
+    (FREND1, 0xB6),    // DN022: RX filter > 101 kHz (ours is 203 kHz)
     (FREND0, 0x11),
     (FSCAL3, 0xE9),
     (FSCAL2, 0x2A),
