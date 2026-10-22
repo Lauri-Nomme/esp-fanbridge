@@ -7,6 +7,13 @@ Legend: **S** = small (minutes), **M** = an evening, **L** = a session of its ow
 
 ---
 
+## 22. ZDO Bind — **already implemented by the stack**
+
+The backlog entry came from old log noise. `zigbee-core` handles
+`BIND_REQ`/`UNBIND_REQ` (`build_zdp_response` -> `apply_bind_req`), Z2M's
+endpoint dump shows real bindings (`genOnOff` -> coordinator), and there is not
+a single `bindRsp` timeout in 24 h of logs. Nothing to do.
+
 ## 1. Zigbee command delivery — measured, announce added
 
 **Original symptom.** Commands sometimes came back as
@@ -250,7 +257,13 @@ with 12 ms).
 
 ## Pairing / endpoints
 
-### 19. Auto-restart after a successful pairing — **S**
+### 19. Auto-restart after pairing + automatic re-interview — **done**
+
+The firmware restarts three seconds after learning a remote (new endpoint
+advertised on boot) and the Z2M converter now re-interviews by itself when it
+sees an announce whose `exposedCount` differs from the endpoint count it has
+cached. Verified in both directions: pairing a remote produced the fourth fan
+entity without any click, deleting one removed it again.
 
 The endpoint set is fixed at boot, so a new remote needs `reboot` + re-interview.
 Restarting automatically after `Paired` (with a console message) removes the most
@@ -269,12 +282,7 @@ short patterns so pairing can be done without the console.
 
 ## Zigbee stack / device behaviour
 
-### 22. Answer ZDO `Bind_req` — **M**
-
-Z2M tries to bind during configure and logs `bindRsp after 10000ms` timeouts
-today. Answering the request (and storing the binding) is the textbook behaviour
-and would make reporting (#13) robust even if the coordinator stops accepting
-unsolicited reports.
+### 22. Answer ZDO `Bind_req` — **already done by the stack** (see round 1, #22)
 
 ### 23. `fanModeSequence` attribute — **S**
 

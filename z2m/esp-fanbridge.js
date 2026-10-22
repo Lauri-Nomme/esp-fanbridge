@@ -13,6 +13,7 @@ const tz = require('zigbee-herdsman-converters/converters/toZigbee');
 const exposes = require('zigbee-herdsman-converters/lib/exposes');
 const constants = require('zigbee-herdsman-converters/lib/constants');
 const utils = require('zigbee-herdsman-converters/lib/utils');
+const logger = require('zigbee-herdsman-converters/lib/logger').logger;
 
 const ea = exposes.access;
 
@@ -56,6 +57,10 @@ const DIRECTION_CLUSTER = {
 
 const DIRECTIONS = ['in', 'out', 'auto'];
 
+// Last fan count we acted on, per IEEE address. Guards against acting twice on
+// the announcements the firmware sends in a burst after boot.
+const lastExposed = new Map();
+
 // `exposes` is also called with a placeholder device (without endpoints) while
 // Zigbee2MQTT validates a definition, so the accessors have to tolerate that.
 const endpoints = (device) => (device && Array.isArray(device.endpoints) ? device.endpoints : []);
@@ -65,6 +70,37 @@ const fanEndpoints = (device) => endpoints(device).filter((endpoint) => endpoint
 
 /** Endpoints that carry an on/off cluster (pairing switch, direction switches). */
 const onOffEndpoints = (device) => endpoints(device).filter((endpoint) => endpoint.supportsInputCluster('genOnOff')).map((endpoint) => endpoint.ID);
+
+/**
+ * The endpoint set is fixed at boot, so pairing or deleting a remote only shows
+ * up after a restart *and* a re-interview. The firmware restarts on its own; this
+ * is the second half: when the device announces an endpoint count that differs
+ * from what the coordinator has cached, ask for a fresh interview so the fan
+ * entities appear without a click.
+ */
+async function maybeReinterview(device) {
+    const master = device.endpoints.find((endpoint) => endpoint.ID === 1);
+    if (!master) return;
+    try {
+        await master.read('espPairing', ['exposedCount']);
+    } catch (e) {
+        logger.info(`esp-fanbridge: announce seen, exposedCount read failed (${e.message})`);
+        return; // asleep, out of range, or an old firmware
+    }
+    const exposed = master.getClusterAttributeValue('espPairing', 'exposedCount');
+    const known = device.endpoints.filter((endpoint) => endpoint.supportsInputCluster('hvacFanCtrl')).length;
+    logger.debug(`esp-fanbridge: announce, exposed=${exposed} known=${known}`);
+    if (typeof exposed !== 'number' || exposed === known) return;
+    if (lastExposed.get(device.ieeeAddr) === exposed) return;
+    lastExposed.set(device.ieeeAddr, exposed);
+    try {
+        logger.info('esp-fanbridge: endpoint set changed, re-interviewing');
+        await device.interview(true);
+    } catch (e) {
+        logger.info(`esp-fanbridge: re-interview failed (${e.message})`);
+        lastExposed.delete(device.ieeeAddr); // try again on the next announce
+    }
+}
 
 module.exports = {
     zigbeeModel: ['esp-fanbridge'],
@@ -178,10 +214,13 @@ module.exports = {
     // Zigbee2MQTT calls `definition.onEvent` as a plain function; register the
     // cluster as early as possible so the first report can be parsed.
     onEvent: async (event) => {
+        const device = event.data.device;
         if (event.type === 'start' || event.type === 'deviceInterview' || event.type === 'deviceJoined') {
-            event.data.device.addCustomCluster('espPairing', PAIRING_CLUSTER);
-            event.data.device.addCustomCluster('espDirection', DIRECTION_CLUSTER);
+            device.addCustomCluster('espPairing', PAIRING_CLUSTER);
+            device.addCustomCluster('espDirection', DIRECTION_CLUSTER);
         }
+        if (event.type !== 'deviceAnnounce') return;
+        await maybeReinterview(device);
     },
     configure: async (device) => {
         device.addCustomCluster('espPairing', PAIRING_CLUSTER);

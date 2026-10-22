@@ -95,6 +95,12 @@ switch endpoints, and adds:
 | `fan.…_<endpoint>` | the remote's fan: four speeds, on/off |
 | `select.…_direction_<endpoint>` | `in`, `out` or `auto` (the fan alternates by itself) |
 
+The converter also watches for `deviceAnnounce`: if the device reports a
+different number of exposed remotes than the coordinator has cached (which
+happens after pairing or deleting one, once the firmware has restarted), it asks
+for a fresh interview, so the fan entities appear/disappear without a manual
+"re-interview" click.
+
 The stage is reported by the device as soon as it changes (including the
 `paired`/`failed` result, which stays visible for 10 seconds), so the user gets
 feedback while pressing the four speed buttons on the remote.
