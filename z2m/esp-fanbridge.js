@@ -39,6 +39,7 @@ const PAIRING_CLUSTER = {
         pairedCount: {name: 'pairedCount', ID: 0x0001, type: 0x20, write: false},
         exposedCount: {name: 'exposedCount', ID: 0x0002, type: 0x20, write: false},
         restartRequired: {name: 'restartRequired', ID: 0x0003, type: 0x10, write: false},
+        rxRearmCount: {name: 'rxRearmCount', ID: 0x0004, type: 0x21, write: false},
     },
     commands: {},
     commandsResponse: {},
@@ -115,6 +116,9 @@ module.exports = {
             new exposes.Enum('pairing_stage', ea.STATE, PAIRING_STAGES).withDescription('Pairing stage'),
             new exposes.Numeric('paired_count', ea.STATE).withDescription('Number of paired remotes'),
             new exposes.Numeric('exposed_count', ea.STATE).withDescription('Remotes currently exposed as endpoints'),
+            new exposes.Numeric('rx_rearm_count', ea.STATE)
+                .withDescription('How often the receiver watchdog had to re-arm the radio')
+                .withCategory('diagnostic'),
             new exposes.Binary('restart_required', ea.STATE, true, false)
                 .withDescription('Pairing changed since boot; restart (or re-interview) to expose it')
                 .withLabel('Restart required'),
@@ -165,6 +169,7 @@ module.exports = {
                 if (msg.data.stage !== undefined) result.pairing_stage = PAIRING_STAGES[msg.data.stage];
                 if (msg.data.pairedCount !== undefined) result.paired_count = msg.data.pairedCount;
                 if (msg.data.exposedCount !== undefined) result.exposed_count = msg.data.exposedCount;
+                if (msg.data.rxRearmCount !== undefined) result.rx_rearm_count = msg.data.rxRearmCount;
                 // derive it from the two counts when both are present: a boolean
                 // survives Zigbee2MQTT's state cache either way
                 if (result.paired_count !== undefined && result.exposed_count !== undefined) {
@@ -229,7 +234,7 @@ module.exports = {
         // needed; ask for the pairing stage so the value starts out known.
         const endpoint = device.endpoints.find((e) => e.supportsInputCluster('espPairing'));
         if (endpoint) {
-            await endpoint.read('espPairing', ['stage', 'pairedCount', 'exposedCount', 'restartRequired']).catch(() => {});
+            await endpoint.read('espPairing', ['stage', 'pairedCount', 'exposedCount', 'restartRequired', 'rxRearmCount']).catch(() => {});
         }
     },
 };
