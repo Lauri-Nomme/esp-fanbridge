@@ -485,6 +485,8 @@ pub struct State {
     pub pair_addr: u32,
     pub pair_step: usize,
     pub pair_last_ms: u64,
+    /// When the current pairing session started (0 = not started yet).
+    pub pair_start_ms: u64,
     /// Transient outcome of the last pairing attempt, shown until `stage_until_ms`.
     pub stage: Stage,
     pub stage_until_ms: u64,
@@ -530,6 +532,7 @@ static STATE: CsMutex<CriticalSectionRawMutex, RefCell<State>> =
         pair_addr: 0,
         pair_step: 0,
         pair_last_ms: 0,
+        pair_start_ms: 0,
         stage: Stage::Idle,
         stage_until_ms: 0,
     }));
@@ -2975,6 +2978,31 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
                 }
             }
             n = 0;
+        }
+
+        // ---- pairing session: start the clock, and give up eventually
+        {
+            let (pairing, started) = STATE.lock(|s| {
+                let st = s.borrow();
+                (st.pairing, st.pair_start_ms)
+            });
+            if pairing && started == 0 {
+                STATE.lock(|s| s.borrow_mut().pair_start_ms = now_ms);
+            } else if pairing && now_ms.saturating_sub(started) > PAIR_SESSION_MS {
+                STATE.lock(|s| {
+                    let mut st = s.borrow_mut();
+                    st.pairing = false;
+                    st.pair_step = 0;
+                    st.pair_addr = 0;
+                    st.pair_start_ms = 0;
+                    st.stage = Stage::Failed;
+                    st.stage_until_ms = now_ms + PAIR_RESULT_MS;
+                });
+                mark_pairing_switch();
+                console.outln("pairing timed out (nothing learned)");
+            } else if !pairing {
+                STATE.lock(|s| s.borrow_mut().pair_start_ms = 0);
+            }
         }
 
         // ---- apply a pending endpoint change
