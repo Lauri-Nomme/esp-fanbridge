@@ -92,6 +92,13 @@ use zigbee_cluster_library::types::ZclEnum8;
 use zigbee_cluster_library::types::strings::ShortStr;
 use zigbee_cluster_library::types::strings::ShortText;
 use zigbee_types::IeeeAddress;
+use esp_fanbridge_protocol::decode_frame;
+use esp_fanbridge_protocol::expand_code;
+use esp_fanbridge_protocol::Seg;
+use esp_fanbridge_protocol::FRAME_GAP_US;
+use esp_fanbridge_protocol::MAX_SEG;
+use esp_fanbridge_protocol::NOISE_US;
+use esp_fanbridge_protocol::TX_PACKET_LEN;
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -140,16 +147,6 @@ const STX: u8 = 0x35;
 
 const FREQ_KHZ: u32 = 433_920;
 
-/// Ignore edges shorter than this (demodulator noise).
-const NOISE_US: u32 = 100;
-/// Silence that ends a frame.
-const FRAME_GAP_US: u32 = 6_000;
-/// Symbol split / sanity bounds.
-const SHORT_MIN: u32 = 250;
-const SHORT_MAX: u32 = 650;
-const LONG_MIN: u32 = 850;
-const LONG_MAX: u32 = 1800;
-const MAX_SEG: usize = 80;
 
 /// Symbol widths used for transmit.
 const T_SHORT: u32 = 400;
@@ -736,11 +733,6 @@ async fn send_code(
 // off, or 12 on + 4 off), so the whole frame becomes 49 ordinary bytes that the
 // radio clocks out on its own. See docs/PACKET-TX.md.
 
-/// Bit period of the expanded stream: 100 us, so 400/1200 us pulses are exactly
-/// 4/12 bits and the on-air timing matches the bit-banged version.
-const TX_BIT_US: u32 = 100;
-/// 24 symbols * 16 bits + the 4-bit trailing pulse, padded to whole bytes.
-const TX_PACKET_LEN: u8 = 49;
 /// Data rate for 100 us per bit (26 MHz crystal): 403 * 256 * 26e6 / 2^28.
 const TX_DRATE_E: u8 = 8;
 const TX_DRATE_M: u8 = 147;
@@ -768,35 +760,7 @@ const ASYNC_RX_REGS: &[(u8, u8)] = &[
     (MDMCFG2, 0x30),
 ];
 
-/// Set one bit of a big-endian bit buffer.
-fn put_bit(out: &mut [u8], pos: &mut usize, one: bool) {
-    if one {
-        out[*pos / 8] |= 1 << (7 - *pos % 8);
-    }
-    *pos += 1;
-}
 
-/// Expand a 24-bit remote code into the NRZ bitstream the radio can send.
-fn expand_code(code: u32) -> [u8; TX_PACKET_LEN as usize] {
-    let mut out = [0u8; TX_PACKET_LEN as usize];
-    let mut pos = 0usize;
-    for i in (0..24).rev() {
-        // 0 -> 400 us high + 1200 us low = 4 on + 12 off
-        // 1 -> 1200 us high + 400 us low = 12 on + 4 off
-        let (high, low) = if (code >> i) & 1 == 1 { (12, 4) } else { (4, 12) };
-        for _ in 0..high {
-            put_bit(&mut out, &mut pos, true);
-        }
-        for _ in 0..low {
-            put_bit(&mut out, &mut pos, false);
-        }
-    }
-    // the remote ends a frame with one short pulse
-    for _ in 0..4 {
-        put_bit(&mut out, &mut pos, true);
-    }
-    out
-}
 
 fn apply_regs(spi: &mut Spi<'_, esp_hal::Blocking>, cs: &mut Output<'_>, regs: &[(u8, u8)]) {
     for &(a, v) in regs {
@@ -861,60 +825,6 @@ async fn send_packet_frame(
     wreg(spi, cs, IOCFG0, 0x0D);
     enter_rx(spi, cs);
     elapsed
-}
-
-// ------------------------------------------------------------------ decoding
-#[derive(Clone, Copy)]
-struct Seg {
-    dt: u32,
-    high: bool,
-}
-
-fn sym(dt: u32) -> Option<bool> {
-    if (SHORT_MIN..=SHORT_MAX).contains(&dt) {
-        Some(false)
-    } else if (LONG_MIN..=LONG_MAX).contains(&dt) {
-        Some(true)
-    } else {
-        None
-    }
-}
-
-fn decode_frame(segs: &[Seg]) -> Option<u32> {
-    for start in 0..segs.len() {
-        if !segs[start].high || start + 48 > segs.len() {
-            continue;
-        }
-        let mut bits: u32 = 0;
-        let mut ok = true;
-        for i in 0..24 {
-            let h = segs[start + 2 * i];
-            let l = segs[start + 2 * i + 1];
-            if !h.high || l.high {
-                ok = false;
-                break;
-            }
-            let (hs, ls) = match (sym(h.dt), sym(l.dt)) {
-                (Some(a), Some(b)) => (a, b),
-                _ => {
-                    ok = false;
-                    break;
-                }
-            };
-            if hs == ls {
-                ok = false;
-                break;
-            }
-            bits = (bits << 1) | u32::from(hs);
-        }
-        if ok {
-            let total: u32 = segs[start..start + 48].iter().map(|s| s.dt).sum();
-            if (33_000..=45_000).contains(&total) {
-                return Some(bits);
-            }
-        }
-    }
-    None
 }
 
 // ------------------------------------------------------------------- helpers

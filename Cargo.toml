@@ -20,6 +20,8 @@ esp32c6 = [
 ]
 
 [dependencies]
+# pure protocol logic, kept in its own crate so it can be unit tested on a host
+esp-fanbridge-protocol = { path = "protocol" }
 esp-alloc = { version = "0.10.0" }
 esp-backtrace = { version = "0.19.0", features = ["panic-handler", "println"] }
 esp32c6-pac = { package = "esp32c6", version = "=0.23.2", optional = true }
