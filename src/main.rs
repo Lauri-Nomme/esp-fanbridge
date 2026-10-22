@@ -1473,12 +1473,24 @@ fn handle_command(c: &mut Console<'_>, line: &str) {
     }
 }
 
-fn fmt_rx<'a>(b: &'a mut [u8; 80], addr: u32, button: u8, code: u32) -> &'a str {
+fn fmt_rx<'a>(b: &'a mut [u8; 80], addr: u32, button: u8, code: u32, rssi_dbm: i32) -> &'a str {
     use core::fmt::Write;
     let mut w = Writer80 { buf: b, pos: 0 };
-    let _ = write!(w, "rx device=0x{addr:05X} button=0x{button:X} code=0x{code:06X}");
+    let _ = write!(
+        w,
+        "rx device=0x{addr:05X} button=0x{button:X} code=0x{code:06X} rssi={rssi_dbm}dBm"
+    );
     let n = w.pos;
     core::str::from_utf8(&b[..n]).unwrap_or("")
+}
+
+/// CC1101 RSSI register (0x34) to dBm, as in the datasheet.
+fn rssi_dbm(raw: u8) -> i32 {
+    if raw >= 128 {
+        (i32::from(raw) - 256) / 2 - 74
+    } else {
+        i32::from(raw) / 2 - 74
+    }
 }
 
 /// Render a command that arrived over Zigbee, naming the slot it controls.
@@ -2802,7 +2814,7 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
             {
                 use core::fmt::Write;
                 let mut w = Writer80 { buf: &mut b, pos: 0 };
-                let dbm = if rssi >= 128 { (rssi as i32 - 256) / 2 - 74 } else { (rssi as i32) / 2 - 74 };
+                let dbm = rssi_dbm(rssi);
                 let iocfg0 = rreg(&mut spi, &mut cs, IOCFG0);
                 let pktctl0 = rreg(&mut spi, &mut cs, PKTCTRL0);
                 let mdmcfg2 = rreg(&mut spi, &mut cs, MDMCFG2);
@@ -2880,7 +2892,10 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
                 if last_code != Some(bits) || now.saturating_sub(last_ms) > 800 {
                     let addr = bits >> 4;
                     let button = (bits & 0xF) as u8;
-                    console.outln(fmt_rx(&mut linebuf, addr, button, bits));
+                    // the level the remote arrived at: the first thing to look
+                    // at when presses start going missing
+                    let rssi = rssi_dbm(rstat(&mut spi, &mut cs, 0x34));
+                    console.outln(fmt_rx(&mut linebuf, addr, button, bits, rssi));
                     match on_frame(addr, button, now) {
                         Ev::Paired(a, i) => {
                             console.outln(fmt2(&mut linebuf, a, i as u32));
