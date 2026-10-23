@@ -194,10 +194,17 @@ module.exports = {
             },
         },
         {
+            // `state` means two different things on this device: for a fan
+            // endpoint it is on/off via the Fan Control mode, for the plain
+            // on/off endpoints (pairing switch, direction switches) it is a
+            // real OnOff command. Dispatch on the endpoint's clusters - the key
+            // alone cannot tell them apart, which made the pairing switch write
+            // FanMode to an endpoint that has no fan controller.
             key: ['state', 'speed'],
             convertSet: async (entity, key, value, meta) => {
-                // Zigbee2MQTT adds the endpoint suffix itself, so return the
-                // plain property names here.
+                if (!entity.supportsInputCluster('hvacFanCtrl')) {
+                    return tz.on_off.convertSet(entity, key, value, meta);
+                }
                 const speedProperty = utils.postfixWithEndpointName('speed', {endpoint: entity}, meta.mapped, meta);
                 if (key === 'state' && value === 'OFF') {
                     await entity.write('hvacFanCtrl', {fanMode: constants.fanMode.off});
@@ -208,13 +215,13 @@ module.exports = {
                 await entity.write('hvacFanCtrl', {fanMode: constants.fanMode[SPEEDS[speed - 1]]});
                 return {state: {state: 'ON', speed}};
             },
-            convertGet: async (entity) => {
-                if (entity.supportsInputCluster('hvacFanCtrl')) {
-                    await entity.read('hvacFanCtrl', ['fanMode']);
+            convertGet: async (entity, key) => {
+                if (!entity.supportsInputCluster('hvacFanCtrl')) {
+                    return tz.on_off.convertGet(entity, key);
                 }
+                await entity.read('hvacFanCtrl', ['fanMode']);
             },
         },
-        tz.on_off,
     ],
     // Zigbee2MQTT calls `definition.onEvent` as a plain function; register the
     // cluster as early as possible so the first report can be parsed.
