@@ -37,6 +37,14 @@ a single `bindRsp` timeout in 24 h of logs. Nothing to do.
 joining. Measured effect: first command after a reset moved from 12.9 s to
 11.5 s and no expired transactions appeared in the window.
 
+**One more data point (2026-10-23).** A direction write from Home Assistant came
+back as `MAC_TRANSACTION_EXPIRED` and the value reverted in HA (the optimistic
+value was overwritten by the device's next report). It happened while the device
+was being reset during a test, and repeated attempts immediately afterwards - and
+10/10 pairing-switch writes - went through. So the failure mode is real but
+rare; if it is seen in normal use again, `status` (`rearm`, `tx`) and the Z2M
+log around the write are the things to capture.
+
 **Left to consider.**
 
 * Boot-to-joined is ~6 s; the expensive part is radio bring-up/calibration, not
