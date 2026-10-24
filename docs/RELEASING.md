@@ -5,9 +5,15 @@ runs the protocol tests, and attaches three files:
 
 | File | What to do with it |
 |---|---|
-| `esp-fanbridge-vX.Y.Z.bin` | merged image (bootloader + partition table + app), flash at `0x0` |
-| `esp-fanbridge-vX.Y.Z.elf` | the application, for the usual `espflash flash` |
+| `esp-fanbridge-vX.Y.Z.app.bin` | the application, flash at `0x10000`; keeps the pairing config |
+| `esp-fanbridge-vX.Y.Z.elf` | for the usual `espflash flash`; keeps the pairing config |
+| `esp-fanbridge-vX.Y.Z.full.bin` | bootloader + partition table + app at `0x0`; for a blank board, **erases the config** |
 | `esp-fanbridge-vX.Y.Z.js` | the Zigbee2MQTT converter that matches this firmware |
+
+The config sector is `0x3E_0000`, the last sector of the `factory` partition
+(`0x10000..0x400000`), which is why the app image and the ELF leave it alone and
+the full image does not. Back a pairing up with `cfg dump` before a full flash and
+restore it with `cfg load`.
 
 ## Cutting one
 
@@ -17,15 +23,16 @@ git tag -a v0.2.0 -m "v0.2.0"
 git push origin v0.2.0
 ```
 
-Watch the run, then check that all three assets are attached and that the `.bin`
-size looks right (roughly 600 KiB with the current partition table, not 8 MiB —
-an oversized image usually means the flash size defaulted wrong).
+Watch the run, then check the assets: the `.app.bin` should be roughly the size
+of the application (under a megabyte today), and the `.full.bin` is padded to the
+whole flash — **4 MiB** on this board. A padded size of 8 MiB means the flash size
+defaulted wrong.
 
 ## Flashing a release
 
 ```sh
-espflash write-bin --port /dev/ttyACM0 0x0 esp-fanbridge-v0.2.0.bin
-espflash flash    --port /dev/ttyACM0     esp-fanbridge-v0.2.0.elf
+espflash write-bin --port /dev/ttyACM0 0x10000 esp-fanbridge-v0.2.0.app.bin
+espflash flash    --port /dev/ttyACM0         esp-fanbridge-v0.2.0.elf
 ```
 
 Both keep the config sector (`0x3E_0000`), so the learned remotes survive. A

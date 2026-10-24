@@ -50,7 +50,7 @@ No toolchain at hand? Every tag publishes the firmware and the matching
 converter (see [`docs/RELEASING.md`](docs/RELEASING.md)):
 
 ```sh
-espflash write-bin --port /dev/ttyACM0 0x0 esp-fanbridge-v0.1.0.bin
+espflash write-bin --port /dev/ttyACM0 0x10000 esp-fanbridge-v0.1.0.app.bin
 ```
 
 ## Console

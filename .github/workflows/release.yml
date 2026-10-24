@@ -28,12 +28,15 @@ jobs:
       - name: Build the firmware
         run: cargo build --release
 
-      - name: Make a single flashable image
+      - name: Make the flashable images
         run: |
           cargo install espflash --locked
-          espflash save-image --merge --chip esp32c6 \
-            target/riscv32imac-unknown-none-elf/release/esp-fanbridge \
-            "esp-fanbridge-${{ github.ref_name }}.bin"
+          elf=target/riscv32imac-unknown-none-elf/release/esp-fanbridge
+          # the application alone, written at the factory partition offset; it
+          # leaves the config sector alone, so learned remotes survive
+          espflash save-image --chip esp32c6 "$elf" "esp-fanbridge-${{ github.ref_name }}.app.bin"
+          # bootloader + partition table + application, for a blank board
+          espflash save-image --merge --chip esp32c6 "$elf" "esp-fanbridge-${{ github.ref_name }}.full.bin"
 
       - name: Collect the artifacts
         run: |
@@ -47,7 +50,8 @@ jobs:
         with:
           files: |
             esp-fanbridge-${{ github.ref_name }}.elf
-            esp-fanbridge-${{ github.ref_name }}.bin
+            esp-fanbridge-${{ github.ref_name }}.app.bin
+            esp-fanbridge-${{ github.ref_name }}.full.bin
             esp-fanbridge-${{ github.ref_name }}.js
           body: |
             ESP32-C6 + CC1101 bridge that drives 433 MHz VT100 ceiling-fan
@@ -57,12 +61,20 @@ jobs:
             ### Flash
 
             ```sh
-            # merged image: bootloader + partitions + application
-            espflash write-bin --port /dev/ttyACM0 0x0 esp-fanbridge-${{ github.ref_name }}.bin
+            # normal update: the application only, learned remotes survive
+            espflash write-bin --port /dev/ttyACM0 0x10000 esp-fanbridge-${{ github.ref_name }}.app.bin
 
-            # or the usual application-only path
+            # or the usual path, which also keeps the config
             espflash flash --port /dev/ttyACM0 esp-fanbridge-${{ github.ref_name }}.elf
+
+            # blank or bricked board: bootloader + partitions + app, at 0x0.
+            # This erases the pairing config - back it up first with `cfg dump`.
+            espflash write-bin --port /dev/ttyACM0 0x0 esp-fanbridge-${{ github.ref_name }}.full.bin
             ```
+
+            The pairing config lives in the last sector of the application
+            partition, so `0x10000`/ELF updates keep it and the full image does
+            not.
 
             ### Converter
 
@@ -71,10 +83,8 @@ jobs:
             `external_converters: [esp-fanbridge.js]` is in `configuration.yaml`,
             and restart Zigbee2MQTT.
 
-            The pairing config lives in its own flash sector, so flashing keeps
-            the learned remotes. A firmware update that changes the endpoint set
-            needs a re-interview; the converter asks for one by itself when it
-            notices.
+            A firmware update that changes the endpoint set needs a re-interview;
+            the converter asks for one by itself when it notices.
 
             ### What it does
 
