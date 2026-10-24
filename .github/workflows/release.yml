@@ -1,0 +1,87 @@
+name: Release
+
+# Flashing a release should not need a Rust toolchain: the tag build produces a
+# merged image (bootloader + partition table + application) that `espflash
+# write-bin` accepts, plus the ELF the usual workflow flashes.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: build and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the ESP32-C6 toolchain
+        run: |
+          rustup toolchain install nightly --profile minimal \
+            --component rust-src --target riscv32imac-unknown-none-elf
+
+      - name: Test the protocol logic
+        run: ./protocol/run-tests.sh
+
+      - name: Build the firmware
+        run: cargo build --release
+
+      - name: Make a single flashable image
+        run: |
+          cargo install espflash --locked
+          espflash save-image --merge --chip esp32c6 \
+            target/riscv32imac-unknown-none-elf/release/esp-fanbridge \
+            "esp-fanbridge-${{ github.ref_name }}.bin"
+
+      - name: Collect the artifacts
+        run: |
+          cp target/riscv32imac-unknown-none-elf/release/esp-fanbridge \
+            "esp-fanbridge-${{ github.ref_name }}.elf"
+          cp z2m/esp-fanbridge.js "esp-fanbridge-${{ github.ref_name }}.js"
+          ls -l esp-fanbridge-${{ github.ref_name }}.*
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            esp-fanbridge-${{ github.ref_name }}.elf
+            esp-fanbridge-${{ github.ref_name }}.bin
+            esp-fanbridge-${{ github.ref_name }}.js
+          body: |
+            ESP32-C6 + CC1101 bridge that drives 433 MHz VT100 ceiling-fan
+            remotes from Zigbee. This release holds the firmware and the
+            Zigbee2MQTT converter that goes with it.
+
+            ### Flash
+
+            ```sh
+            # merged image: bootloader + partitions + application
+            espflash write-bin --port /dev/ttyACM0 0x0 esp-fanbridge-${{ github.ref_name }}.bin
+
+            # or the usual application-only path
+            espflash flash --port /dev/ttyACM0 esp-fanbridge-${{ github.ref_name }}.elf
+            ```
+
+            ### Converter
+
+            Copy `esp-fanbridge-${{ github.ref_name }}.js` to Zigbee2MQTT's
+            `data/external_converters/esp-fanbridge.js`, make sure
+            `external_converters: [esp-fanbridge.js]` is in `configuration.yaml`,
+            and restart Zigbee2MQTT.
+
+            The pairing config lives in its own flash sector, so flashing keeps
+            the learned remotes. A firmware update that changes the endpoint set
+            needs a re-interview; the converter asks for one by itself when it
+            notices.
+
+            ### What it does
+
+            * one Zigbee fan endpoint per learned remote: four speeds, `in`/`out`/`auto` direction
+            * pairing from the console or from the pairing switch in Home Assistant, with stage feedback
+            * state reported for every change, whether it came from Zigbee, the console or the RF remote
+            * LED: heartbeat, pairing, success/failure, identify
+
+            Requires Zigbee2MQTT 2.15.0 or newer, or 2.14.2 with
+            Koenkk/zigbee2mqtt#33435 applied.
