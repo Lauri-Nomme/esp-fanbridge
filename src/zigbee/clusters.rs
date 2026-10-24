@@ -60,6 +60,10 @@ pub const A_ONOFF: Attribute<Bool, ReadOnly, Reportable> =
     CL_ONOFF.attribute(AttributeId(0x0000), "OnOff");
 pub const A_FANMODE: Attribute<Enum8<FanMode>, ReadWrite, Reportable> =
     CL_FAN.attribute(AttributeId(0x0000), "FanMode");
+/// Required by the cluster, and the only way a coordinator can learn which modes
+/// this fan actually cycles through.
+pub const A_FAN_MODE_SEQ: Attribute<Enum8<FanModeSeq>, ReadOnly, Reportable> =
+    CL_FAN.attribute(AttributeId(0x0001), "FanModeSequence");
 pub const A_STAGE: Attribute<Enum8<Stage>, ReadOnly, Reportable> =
     CL_PAIRING.attribute(AttributeId(0x0000), "stage");
 pub const A_PAIRED_COUNT: Attribute<Uint8, ReadOnly, Reportable> =
@@ -76,7 +80,7 @@ pub const A_RX_REARM_COUNT: Attribute<Uint16, ReadOnly, Reportable> =
 pub static ONOFF_ATTRS: [AttrInfo; 1] = [A_ONOFF.attr_info()];
 /// Shared reporting store: enough to accept Configure Reporting from the coordinator.
 pub static REPORTING: ReportingTable<16> = ReportingTable::new();
-pub static FAN_ATTRS: [AttrInfo; 1] = [A_FANMODE.attr_info()];
+pub static FAN_ATTRS: [AttrInfo; 2] = [A_FANMODE.attr_info(), A_FAN_MODE_SEQ.attr_info()];
 pub static PAIRING_ATTRS: [AttrInfo; 5] = [
     A_STAGE.attr_info(),
     A_PAIRED_COUNT.attr_info(),
@@ -94,6 +98,32 @@ pub enum FanMode {
     High,
     /// ZCL `on` (4): the remote's fourth speed.
     On,
+}
+
+/// ZCL `FanModeSequence` (0x0001): the cycle a coordinator should present.
+///
+/// The fan has four speeds, and only three of them are standard modes: the
+/// fourth is ZCL `on`, which no sequence value covers. Claiming
+/// `Low/Med/High/Auto` (the ZCL default) would advertise an `auto` mode this
+/// fan does not have, so the closest true statement is `Low/Med/High` - `on` is
+/// still accepted as a mode, it is just not part of the advertised cycle.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum FanModeSeq {
+    LowMedHigh,
+}
+
+impl ZclEnum8 for FanModeSeq {
+    fn from_raw(raw: u8) -> Option<Self> {
+        match raw {
+            0 => Some(FanModeSeq::LowMedHigh),
+            _ => None,
+        }
+    }
+    fn into_raw(self) -> u8 {
+        match self {
+            FanModeSeq::LowMedHigh => 0x00,
+        }
+    }
 }
 
 impl ZclEnum8 for FanMode {
@@ -266,8 +296,10 @@ impl<const SLOT: usize> ClusterServer for FanEp<SLOT> {
         Some(&REPORTING)
     }
     fn encode_value(&self, id: AttributeId, out: &mut [u8], offset: &mut usize) -> Status {
-        if id.0 != 0x0000 {
-            return Status::UnsupportedAttribute;
+        match id.0 {
+            0x0001 => return ok(A_FAN_MODE_SEQ.encode(FanModeSeq::LowMedHigh, out, offset)),
+            0x0000 => {}
+            _ => return Status::UnsupportedAttribute,
         }
         let mode = STATE.lock(|s| {
             let st = s.borrow();
