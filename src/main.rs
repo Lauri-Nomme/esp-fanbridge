@@ -134,7 +134,8 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
     let mut last_ms: u64 = 0;
     let mut last_identify_tick_ms: u64 = 0;
     let mut last_rx_check_ms: u64 = 0;
-    // set when a pairing changed the endpoint set and a restart is scheduled
+    // set when a pairing changed the endpoint set and a restart is scheduled;
+    // a coordinator can also ask for one (the `reboot` command)
     let mut restart_at_ms: Option<u64> = None;
     let mut linebuf = [0u8; 80];
     let mut clock_on = false;
@@ -390,7 +391,13 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
             }
         }
 
-        // ---- apply a pending endpoint change
+        // ---- apply a pending endpoint change (console pairing or a command)
+        let asked = REBOOT_AT_MS.load(Ordering::Relaxed);
+        if asked != 0 && now_ms >= u64::from(asked) {
+            REBOOT_AT_MS.store(0, Ordering::Relaxed);
+            console.outln("restarting (requested)...");
+            esp_hal::system::software_reset();
+        }
         if let Some(at) = restart_at_ms {
             if t0.elapsed().as_millis() >= at {
                 console.outln("restarting...");

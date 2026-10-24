@@ -141,6 +141,16 @@ pub static RX_COUNT: AtomicU32 = AtomicU32::new(0);
 pub static REARM_COUNT: AtomicU32 = AtomicU32::new(0);
 pub static UPTIME_MS: AtomicU32 = AtomicU32::new(0);
 
+/// Uptime at which to restart, or 0. A coordinator command sets it instead of
+/// resetting on the spot, so the write response still reaches the caller.
+pub static REBOOT_AT_MS: AtomicU32 = AtomicU32::new(0);
+
+/// Ask for a restart in `delay_ms`, unless one is already pending.
+pub fn request_reboot_in(delay_ms: u32) {
+    let at = UPTIME_MS.load(Ordering::Relaxed).saturating_add(delay_ms).max(1);
+    REBOOT_AT_MS.store(at, Ordering::Relaxed);
+}
+
 /// `true` = packet-mode transmit (radio sends the bitstream), `false` = the
 /// per-edge bit-bang path. Off by default until the expanded stream has been
 /// confirmed against the physical fans; `txmode packet` switches at runtime.
