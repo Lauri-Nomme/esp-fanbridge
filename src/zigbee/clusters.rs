@@ -7,6 +7,9 @@
 use core::sync::atomic::AtomicU32;
 use core::sync::atomic::Ordering;
 
+use zigbee::zdo::ClusterReply;
+use zigbee::zdo::ClusterRequest;
+use zigbee::zdo::ClusterRequestHandler;
 use zigbee_cluster_library::clusters::general::basic;
 use zigbee_cluster_library::clusters::general::identify::IdentifyServer;
 use zigbee_cluster_library::frame::Status;
@@ -31,22 +34,19 @@ use zigbee_cluster_library::types::Uint8;
 use zigbee_cluster_library::types::Uint16;
 use zigbee_cluster_library::types::ZclEnum8;
 use zigbee_cluster_library::types::strings::ShortStr;
-use zigbee::zdo::ClusterReply;
-use zigbee::zdo::ClusterRequest;
-use zigbee::zdo::ClusterRequestHandler;
 
 use crate::config::save_config;
-use crate::pairing::*;
 use crate::pairing::Direction;
 use crate::pairing::Stage;
+use crate::pairing::*;
+use crate::state::REARM_COUNT;
+use crate::state::STATE;
+use crate::state::TX_REQ;
 use crate::state::mark_direction;
 use crate::state::mark_fan_mode;
 use crate::state::mark_pairing_switch;
-use crate::state::zb_event;
-use crate::state::REARM_COUNT;
 use crate::state::request_reboot_in;
-use crate::state::STATE;
-use crate::state::TX_REQ;
+use crate::state::zb_event;
 use crate::zigbee::EP_FAN0;
 use crate::zigbee::EP_MASTER;
 
@@ -137,7 +137,6 @@ pub fn mode_of_speed(speed: u8) -> FanMode {
         _ => FanMode::Off,
     }
 }
-
 
 pub fn ok(r: byte::Result<()>) -> Status {
     match r {
@@ -241,7 +240,9 @@ impl<const EP: u8, const SLOT: i8, const KIND: u8> ClusterServer for OnOffEp<EP,
     }
 }
 
-impl<const EP: u8, const SLOT: i8, const KIND: u8> ClusterRequestHandler for OnOffEp<EP, SLOT, KIND> {
+impl<const EP: u8, const SLOT: i8, const KIND: u8> ClusterRequestHandler
+    for OnOffEp<EP, SLOT, KIND>
+{
     fn handle(&self, r: &ClusterRequest<'_>, out: &mut [u8]) -> Option<ClusterReply> {
         if r.dst_endpoint != EP {
             return None;
@@ -271,7 +272,11 @@ impl<const SLOT: usize> ClusterServer for FanEp<SLOT> {
         let mode = STATE.lock(|s| {
             let st = s.borrow();
             let slot = &st.cfg.slots[SLOT];
-            if slot.power { mode_of_speed(slot.speed) } else { FanMode::Off }
+            if slot.power {
+                mode_of_speed(slot.speed)
+            } else {
+                FanMode::Off
+            }
         });
         ok(A_FANMODE.encode(mode, out, offset))
     }
@@ -409,7 +414,13 @@ impl<const SLOT: usize> ClusterServer for DirEp<SLOT> {
         let dir = STATE.lock(|s| Direction::from_u8(s.borrow().cfg.slots[SLOT].dir));
         ok(A_DIRECTION.encode(dir, out, offset))
     }
-    fn decode_value(&self, id: AttributeId, ty: TypeId, bytes: &[u8], offset: &mut usize) -> Status {
+    fn decode_value(
+        &self,
+        id: AttributeId,
+        ty: TypeId,
+        bytes: &[u8],
+        offset: &mut usize,
+    ) -> Status {
         if id.0 != 0x0000 {
             return Status::UnsupportedAttribute;
         }
@@ -549,7 +560,7 @@ pub static BASIC_MASTER: Basic = Basic {
     model: MODEL_MASTER,
 };
 pub static BASIC_F0: Basic = Basic {
-    ep: EP_FAN0 + 0,
+    ep: EP_FAN0,
     manufacturer: VENDOR,
     model: "fan-1",
 };
@@ -590,4 +601,3 @@ pub static BASIC_F7: Basic = Basic {
 };
 
 pub static IDENTIFY: IdentifyServer = IdentifyServer::new();
-

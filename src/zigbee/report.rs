@@ -7,22 +7,22 @@
 use core::sync::atomic::Ordering;
 
 use embassy_time::Delay as AsyncDelay;
+use zigbee_cluster_library::profile;
 use zigbee_cluster_library::reporting::AttributeReportBuilder;
 use zigbee_cluster_library::sender::ZclReportTarget;
 use zigbee_cluster_library::sender::ZclSender;
 use zigbee_cluster_library::types::Uint8;
 use zigbee_cluster_library::types::Uint16;
 use zigbee_cluster_library::types::ZclEnum8;
-use zigbee_cluster_library::profile;
 
 use crate::pairing::Direction;
 use crate::pairing::Stage;
 use crate::state::REARM_COUNT;
 use crate::state::STATE;
-use crate::zigbee::clusters::*;
 use crate::zigbee::EP_FAN0;
 use crate::zigbee::EP_MASTER;
 use crate::zigbee::ZbStack;
+use crate::zigbee::clusters::*;
 
 pub async fn send_state_report(stack: &ZbStack, bit: u32) -> bool {
     use core::sync::atomic::AtomicU8;
@@ -35,7 +35,14 @@ pub async fn send_state_report(stack: &ZbStack, bit: u32) -> bool {
         let (used, mode) = STATE.lock(|s| {
             let st = s.borrow();
             let sl = &st.cfg.slots[slot];
-            (sl.used(), if sl.power { mode_of_speed(sl.speed) } else { FanMode::Off })
+            (
+                sl.used(),
+                if sl.power {
+                    mode_of_speed(sl.speed)
+                } else {
+                    FanMode::Off
+                },
+            )
         });
         if !used {
             return true; // nothing behind this bit, drop it
@@ -51,7 +58,10 @@ pub async fn send_state_report(stack: &ZbStack, bit: u32) -> bool {
         let slot = (bit - 8) as usize;
         let (used, dir) = STATE.lock(|s| {
             let st = s.borrow();
-            (st.cfg.slots[slot].used(), Direction::from_u8(st.cfg.slots[slot].dir))
+            (
+                st.cfg.slots[slot].used(),
+                Direction::from_u8(st.cfg.slots[slot].dir),
+            )
         });
         if !used {
             return true;
@@ -133,4 +143,3 @@ pub async fn send_pairing_report(stack: &ZbStack) -> bool {
         Ok(confirm) if confirm.status == zigbee::aps::apsde::ApsdeSapConfirmStatus::Success
     )
 }
-

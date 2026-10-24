@@ -80,7 +80,7 @@ pub fn record(uptime_ms: u32, info: &core::panic::PanicInfo<'_>) {
 
     // the record is 4-byte aligned by construction (offsets 0,4,8,12,172)
     let mut words = [0u32; RECORD / 4];
-    for (i, chunk) in rec.chunks_exact(4).enumerate() {
+    for (i, chunk) in rec.as_chunks::<4>().0.iter().enumerate() {
         words[i] = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
     }
     critical_section::with(|_| unsafe {

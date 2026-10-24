@@ -5,7 +5,7 @@
 //! version-1 migration - the part that can silently lose a user's paired
 //! remotes - is covered by host tests. This module is the flash I/O around it.
 
-pub use esp_fanbridge_protocol::config::{Config, Name, Slot, CFG_BYTES, NAME_MAX};
+pub use esp_fanbridge_protocol::config::{CFG_BYTES, Config, NAME_MAX, Name, Slot};
 
 pub const CFG_ADDR: u32 = 0x003E_0000;
 pub const CFG_SECTOR: u32 = CFG_ADDR / 0x1000;
@@ -31,7 +31,8 @@ pub fn load_config() -> Config {
 pub fn save_config(cfg: &Config) -> bool {
     let mut buf = [0u32; CFG_BYTES / 4];
     {
-        let bytes: &mut [u8; CFG_BYTES] = unsafe { &mut *(buf.as_mut_ptr() as *mut [u8; CFG_BYTES]) };
+        let bytes: &mut [u8; CFG_BYTES] =
+            unsafe { &mut *(buf.as_mut_ptr() as *mut [u8; CFG_BYTES]) };
         // `bytes` always stamps the current version and its checksum
         *bytes = cfg.bytes();
     }
@@ -40,11 +41,7 @@ pub fn save_config(cfg: &Config) -> bool {
         if esp_storage::ll::spiflash_erase_sector(CFG_SECTOR).is_err() {
             return false;
         }
-        esp_storage::ll::spiflash_write(
-            CFG_ADDR,
-            buf.as_ptr(),
-            core::mem::size_of_val(&buf) as u32,
-        )
-        .is_ok()
+        esp_storage::ll::spiflash_write(CFG_ADDR, buf.as_ptr(), core::mem::size_of_val(&buf) as u32)
+            .is_ok()
     })
 }

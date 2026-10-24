@@ -8,18 +8,18 @@ use core::sync::atomic::Ordering;
 
 use esp_hal::usb_serial_jtag::UsbSerialJtag;
 
-use crate::zigbee::*;
-use zigbee_cluster_library::server::ClusterServer;
-use zigbee_cluster_library::types::AttributeId;
-use crate::config::save_config;
-use crate::config::Config;
-use crate::config::Name;
 use crate::config::CFG_BYTES;
+use crate::config::Config;
 use crate::config::NAME_MAX;
+use crate::config::Name;
 use crate::config::Slot;
+use crate::config::save_config;
 use crate::pairing::*;
 use crate::radio::*;
 use crate::state::*;
+use crate::zigbee::*;
+use zigbee_cluster_library::server::ClusterServer;
+use zigbee_cluster_library::types::AttributeId;
 
 /// Longest console line. A `cfg dump` line is a 5-character offset plus 64
 /// hex digits, so the buffer has to be wider than the classic terminal line.
@@ -90,7 +90,7 @@ impl<'d> Console<'d> {
                             self.n -= 1;
                             self.out("\x08 \x08");
                         }
-                    } else if self.n < LINE_LEN - 1 && b >= 32 && b < 127 {
+                    } else if self.n < LINE_LEN - 1 && (32..127).contains(&b) {
                         self.line[self.n] = b;
                         self.n += 1;
                         let s = [b];
@@ -117,15 +117,18 @@ pub fn copy_name(name: Name) -> [u8; NAME_MAX] {
 }
 
 pub fn fmt_name<'a>(b: &'a mut [u8; 96], text: &[u8; NAME_MAX], slot: Option<usize>) -> &'a str {
-    let text = core::str::from_utf8(&text[..text.iter().position(|&c| c == 0).unwrap_or(NAME_MAX)]).unwrap_or("");
+    let text = core::str::from_utf8(&text[..text.iter().position(|&c| c == 0).unwrap_or(NAME_MAX)])
+        .unwrap_or("");
     let pos = {
         let mut w = Writer96 { buf: b, pos: 0 };
         match slot {
             Some(i) => {
-                let _ = core::fmt::Write::write_fmt(&mut w, format_args!("fan {i} name: \"{text}\""));
+                let _ =
+                    core::fmt::Write::write_fmt(&mut w, format_args!("fan {i} name: \"{text}\""));
             }
             None => {
-                let _ = core::fmt::Write::write_fmt(&mut w, format_args!("device name: \"{text}\""));
+                let _ =
+                    core::fmt::Write::write_fmt(&mut w, format_args!("device name: \"{text}\""));
             }
         }
         w.pos
@@ -137,8 +140,7 @@ pub fn print_list(c: &mut Console<'_>) {
     STATE.lock(|s| {
         let st = s.borrow();
         c.outln("slot  address    speed  dir    power  name");
-        for i in 0..8 {
-            let sl = &st.cfg.slots[i];
+        for (i, sl) in st.cfg.slots.iter().enumerate() {
             if sl.used() {
                 let mut b = [0u8; 96];
                 let txt = format_slot(&mut b, i, sl);
@@ -195,7 +197,7 @@ impl Console<'_> {
             let off = i * 32;
             let mut pos = 0;
             for shift in [8u32, 4, 0] {
-                b[pos] = HEX[((off >> shift) & 0xF) as usize];
+                b[pos] = HEX[(off >> shift) & 0xF];
                 pos += 1;
             }
             b[pos] = b':';
@@ -221,13 +223,12 @@ impl Console<'_> {
             return;
         }
         let mut body = line;
-        if let Some((head, rest)) = line.split_once(':') {
-            if !head.is_empty()
-                && head.len() <= 4
-                && head.chars().all(|c| c.is_ascii_hexdigit())
-            {
-                body = rest;
-            }
+        if let Some((head, rest)) = line.split_once(':')
+            && !head.is_empty()
+            && head.len() <= 4
+            && head.chars().all(|c| c.is_ascii_hexdigit())
+        {
+            body = rest;
         }
         // parse the line whole, so a typo cannot leave half a line behind
         let mut chunk = [0u8; 48];
@@ -264,7 +265,9 @@ impl Console<'_> {
         self.staging.active = false;
         let image = self.staging.image;
         let Some(cfg) = Config::from_bytes(&image) else {
-            self.outln("cfg load: not a valid image (magic, version or checksum wrong) - nothing changed");
+            self.outln(
+                "cfg load: not a valid image (magic, version or checksum wrong) - nothing changed",
+            );
             return;
         };
         let (saved, count, restart) = STATE.lock(|s| {
@@ -277,12 +280,19 @@ impl Console<'_> {
         mark_all_state();
         let mut b = [0u8; 96];
         let pos = {
-            let mut w = Writer96 { buf: &mut b, pos: 0 };
+            let mut w = Writer96 {
+                buf: &mut b,
+                pos: 0,
+            };
             let _ = core::fmt::Write::write_fmt(
                 &mut w,
                 format_args!(
                     "cfg load: {count} remote(s){}, {}",
-                    if restart { ", restart to expose the new endpoints" } else { "" },
+                    if restart {
+                        ", restart to expose the new endpoints"
+                    } else {
+                        ""
+                    },
                     if saved { "saved" } else { "SAVE FAILED" },
                 ),
             );
@@ -328,7 +338,9 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
             c.outln("  cfg load             paste a dump back, then a line with end");
             c.outln("  identify <secs>      blink the LED like the coordinator's identify");
             c.outln("  reboot               restart (needed after pair/del: the endpoint set is fixed at boot)");
-            c.outln("  panic                crash on purpose (checks that the next boot reports it)");
+            c.outln(
+                "  panic                crash on purpose (checks that the next boot reports it)",
+            );
         }
         "list" => print_list(c),
         "pair" => {
@@ -355,16 +367,20 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
             c.outln("pairing cancelled");
         }
         "del" => {
-            if let Some(a) = it.next().and_then(|v| v.parse::<usize>().ok()) {
-                if a < 8 {
-                    let ok = STATE.lock(|s| {
-                        let mut st = s.borrow_mut();
-                        st.cfg.slots[a] = Slot::default();
-                        save_config(&st.cfg)
-                    });
-                    c.outln(if ok { "deleted" } else { "deleted (save failed)" });
-                    c.outln("reboot (or re-interview in Zigbee2MQTT) to drop the endpoint");
-                }
+            if let Some(a) = it.next().and_then(|v| v.parse::<usize>().ok())
+                && a < 8
+            {
+                let ok = STATE.lock(|s| {
+                    let mut st = s.borrow_mut();
+                    st.cfg.slots[a] = Slot::default();
+                    save_config(&st.cfg)
+                });
+                c.outln(if ok {
+                    "deleted"
+                } else {
+                    "deleted (save failed)"
+                });
+                c.outln("reboot (or re-interview in Zigbee2MQTT) to drop the endpoint");
             }
         }
         "speed" => {
@@ -439,34 +455,40 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
         "power" => {
             let a = it.next().and_then(|v| v.parse::<usize>().ok());
             let pv = it.next().unwrap_or("");
-            if let Some(a) = a {
-                if a < 8 && (pv == "on" || pv == "off") {
-                    let wanted = pv == "on";
-                    let code = STATE.lock(|s| {
-                        let mut st = s.borrow_mut();
-                        let slot = &mut st.cfg.slots[a];
-                        if !slot.used() || slot.power == wanted {
-                            return 0;
-                        }
-                        slot.power = wanted;
-                        let snap = st.cfg;
-                        drop(st);
-                        save_config(&snap);
-                        // turning on is done with a speed press, as the remote does
-                        let btn = if wanted {
-                            speed_button(if snap.slots[a].speed == 0 { 1 } else { snap.slots[a].speed }).unwrap_or(BTN_SPEED1)
-                        } else {
-                            BTN_POWER
-                        };
-                        code_for(&snap.slots[a], btn)
-                    });
-                    if code != 0 {
-                        TX_REQ.store(code | 0x8000_0000, Ordering::Relaxed);
-                        mark_fan_mode(a);
-                        c.outln("sent");
-                    } else {
-                        c.outln("slot is empty or already in that state");
+            if let Some(a) = a
+                && a < 8
+                && (pv == "on" || pv == "off")
+            {
+                let wanted = pv == "on";
+                let code = STATE.lock(|s| {
+                    let mut st = s.borrow_mut();
+                    let slot = &mut st.cfg.slots[a];
+                    if !slot.used() || slot.power == wanted {
+                        return 0;
                     }
+                    slot.power = wanted;
+                    let snap = st.cfg;
+                    drop(st);
+                    save_config(&snap);
+                    // turning on is done with a speed press, as the remote does
+                    let btn = if wanted {
+                        speed_button(if snap.slots[a].speed == 0 {
+                            1
+                        } else {
+                            snap.slots[a].speed
+                        })
+                        .unwrap_or(BTN_SPEED1)
+                    } else {
+                        BTN_POWER
+                    };
+                    code_for(&snap.slots[a], btn)
+                });
+                if code != 0 {
+                    TX_REQ.store(code | 0x8000_0000, Ordering::Relaxed);
+                    mark_fan_mode(a);
+                    c.outln("sent");
+                } else {
+                    c.outln("slot is empty or already in that state");
                 }
             }
         }
@@ -487,7 +509,10 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
                 let mut b = [0u8; 80];
                 {
                     use core::fmt::Write;
-                    let mut w = Writer80 { buf: &mut b, pos: 0 };
+                    let mut w = Writer80 {
+                        buf: &mut b,
+                        pos: 0,
+                    };
                     let _ = write!(w, "ep {} device_id=0x{:04X} in=", ep.endpoint, ep.device_id);
                     for c in ep.input_clusters {
                         let _ = write!(w, "0x{:04X} ", c);
@@ -500,7 +525,10 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
         "status" => {
             let mut b = [0u8; 96];
             let pos = {
-                let mut w = Writer96 { buf: &mut b, pos: 0 };
+                let mut w = Writer96 {
+                    buf: &mut b,
+                    pos: 0,
+                };
                 let _ = core::fmt::Write::write_fmt(
                     &mut w,
                     format_args!(
@@ -509,10 +537,22 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
                         TX_COUNT.load(Ordering::Relaxed),
                         RX_COUNT.load(Ordering::Relaxed),
                         REARM_COUNT.load(Ordering::Relaxed),
-                        if TX_PACKET.load(Ordering::Relaxed) { "packet" } else { "async" },
+                        if TX_PACKET.load(Ordering::Relaxed) {
+                            "packet"
+                        } else {
+                            "async"
+                        },
                         FREQ_KHZ,
-                        if DEBUG_ON.load(Ordering::Relaxed) { "on" } else { "off" },
-                        if STATE.lock(|s| s.borrow().pairing) { "on" } else { "off" },
+                        if DEBUG_ON.load(Ordering::Relaxed) {
+                            "on"
+                        } else {
+                            "off"
+                        },
+                        if STATE.lock(|s| s.borrow().pairing) {
+                            "on"
+                        } else {
+                            "off"
+                        },
                     ),
                 );
                 w.pos
@@ -522,24 +562,22 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
         "stat" => {
             STAT_REQ.store(true, Ordering::Relaxed);
         }
-        "debug" => {
-            match it.next() {
-                Some("on") => {
-                    DEBUG_ON.store(true, Ordering::Relaxed);
-                    c.outln("debug on");
-                }
-                Some("off") => {
-                    DEBUG_ON.store(false, Ordering::Relaxed);
-                    c.outln("debug off");
-                }
-                None | Some("status") => c.outln(if DEBUG_ON.load(Ordering::Relaxed) {
-                    "debug on"
-                } else {
-                    "debug off"
-                }),
-                Some(_) => c.outln("usage: debug [on|off]"),
+        "debug" => match it.next() {
+            Some("on") => {
+                DEBUG_ON.store(true, Ordering::Relaxed);
+                c.outln("debug on");
             }
-        }
+            Some("off") => {
+                DEBUG_ON.store(false, Ordering::Relaxed);
+                c.outln("debug off");
+            }
+            None | Some("status") => c.outln(if DEBUG_ON.load(Ordering::Relaxed) {
+                "debug on"
+            } else {
+                "debug off"
+            }),
+            Some(_) => c.outln("usage: debug [on|off]"),
+        },
         "clock" => {
             CLOCK_REQ.store(true, Ordering::Relaxed);
         }
@@ -549,14 +587,25 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
         }
         "basic" => {
             // encode every Basic attribute the way a read response does
-            for id in [0x0000u16, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006, 0x0007, 0x4000] {
+            for id in [
+                0x0000u16, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006, 0x0007, 0x4000,
+            ] {
                 let mut buf = [0u8; 64];
                 let mut off = 0usize;
                 let st = BASIC_MASTER.encode_value(AttributeId(id), &mut buf, &mut off);
                 let mut line = [0u8; 80];
                 let pos = {
-                    let mut w = Writer80 { buf: &mut line, pos: 0 };
-                    let _ = core::fmt::Write::write_fmt(&mut w, format_args!("attr 0x{id:04X} status={st:?} len={off} data={:02X?}", &buf[..off]));
+                    let mut w = Writer80 {
+                        buf: &mut line,
+                        pos: 0,
+                    };
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut w,
+                        format_args!(
+                            "attr 0x{id:04X} status={st:?} len={off} data={:02X?}",
+                            &buf[..off]
+                        ),
+                    );
                     w.pos
                 };
                 let t = core::str::from_utf8(&line[..pos]).unwrap_or("");
@@ -577,7 +626,10 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
             for (i, (addr, speed, dir, power, name)) in raw.iter().enumerate() {
                 let mut b = [0u8; 96];
                 let pos = {
-                    let mut w = Writer96 { buf: &mut b, pos: 0 };
+                    let mut w = Writer96 {
+                        buf: &mut b,
+                        pos: 0,
+                    };
                     let _ = core::fmt::Write::write_fmt(
                         &mut w,
                         format_args!(
@@ -595,63 +647,63 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
             }
             let mut b = [0u8; 64];
             let pos = {
-                let mut w = Writer { buf: &mut b, pos: 0 };
+                let mut w = Writer {
+                    buf: &mut b,
+                    pos: 0,
+                };
                 let _ = core::fmt::Write::write_fmt(&mut w, format_args!("paired_count={count}"));
                 w.pos
             };
             c.outln(core::str::from_utf8(&b[..pos]).unwrap_or(""));
         }
-        "repeats" => {
-            match it.next().and_then(|v| v.parse::<u32>().ok()) {
-                Some(n) if n > 0 && n <= 64 => {
-                    TX_REPEATS.store(n, Ordering::Relaxed);
-                    c.outln("repeats set");
-                }
-                _ => {
-                    let mut b = [0u8; 64];
-                    let pos = {
-                        let mut w = Writer { buf: &mut b, pos: 0 };
-                        let _ = core::fmt::Write::write_fmt(
-                            &mut w,
-                            format_args!(
-                                "repeats={} gap={}ms",
-                                TX_REPEATS.load(Ordering::Relaxed),
-                                TX_GAP_MS.load(Ordering::Relaxed)
-                            ),
-                        );
-                        w.pos
+        "repeats" => match it.next().and_then(|v| v.parse::<u32>().ok()) {
+            Some(n) if n > 0 && n <= 64 => {
+                TX_REPEATS.store(n, Ordering::Relaxed);
+                c.outln("repeats set");
+            }
+            _ => {
+                let mut b = [0u8; 64];
+                let pos = {
+                    let mut w = Writer {
+                        buf: &mut b,
+                        pos: 0,
                     };
-                    c.outln(core::str::from_utf8(&b[..pos]).unwrap_or(""));
-                }
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut w,
+                        format_args!(
+                            "repeats={} gap={}ms",
+                            TX_REPEATS.load(Ordering::Relaxed),
+                            TX_GAP_MS.load(Ordering::Relaxed)
+                        ),
+                    );
+                    w.pos
+                };
+                c.outln(core::str::from_utf8(&b[..pos]).unwrap_or(""));
             }
-        }
-        "gap" => {
-            match it.next().and_then(|v| v.parse::<u32>().ok()) {
-                Some(ms) if ms <= 2000 => {
-                    TX_GAP_MS.store(ms, Ordering::Relaxed);
-                    c.outln("gap set");
-                }
-                _ => c.outln("usage: gap <ms>"),
+        },
+        "gap" => match it.next().and_then(|v| v.parse::<u32>().ok()) {
+            Some(ms) if ms <= 2000 => {
+                TX_GAP_MS.store(ms, Ordering::Relaxed);
+                c.outln("gap set");
             }
-        }
-        "txmode" => {
-            match it.next() {
-                Some("packet") => {
-                    TX_PACKET.store(true, Ordering::Relaxed);
-                    c.outln("tx mode: packet (radio sends the expanded bitstream)");
-                }
-                Some("async") => {
-                    TX_PACKET.store(false, Ordering::Relaxed);
-                    c.outln("tx mode: async (firmware drives GDO0 per edge)");
-                }
-                None => c.outln(if TX_PACKET.load(Ordering::Relaxed) {
-                    "tx mode: packet (radio sends the expanded bitstream)"
-                } else {
-                    "tx mode: async (firmware drives GDO0 per edge)"
-                }),
-                Some(_) => c.outln("usage: txmode [packet|async]"),
+            _ => c.outln("usage: gap <ms>"),
+        },
+        "txmode" => match it.next() {
+            Some("packet") => {
+                TX_PACKET.store(true, Ordering::Relaxed);
+                c.outln("tx mode: packet (radio sends the expanded bitstream)");
             }
-        }
+            Some("async") => {
+                TX_PACKET.store(false, Ordering::Relaxed);
+                c.outln("tx mode: async (firmware drives GDO0 per edge)");
+            }
+            None => c.outln(if TX_PACKET.load(Ordering::Relaxed) {
+                "tx mode: packet (radio sends the expanded bitstream)"
+            } else {
+                "tx mode: async (firmware drives GDO0 per edge)"
+            }),
+            Some(_) => c.outln("usage: txmode [packet|async]"),
+        },
         "cfg" => match it.next() {
             Some("dump") => c.cfg_dump(),
             Some("load") => {
@@ -695,11 +747,11 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
 
             if rest.is_empty() {
                 let text = copy_name(STATE.lock(|s| s.borrow().cfg.device_name));
-                c.outln(&fmt_name(&mut [0u8; 96], &text, None));
+                c.outln(fmt_name(&mut [0u8; 96], &text, None));
             } else if let Some(slot) = slot {
                 if tail.is_empty() {
                     let text = copy_name(STATE.lock(|s| s.borrow().cfg.slots[slot].name));
-                    c.outln(&fmt_name(&mut [0u8; 96], &text, Some(slot)));
+                    c.outln(fmt_name(&mut [0u8; 96], &text, Some(slot)));
                 } else {
                     let ok = STATE.lock(|s| {
                         let mut st = s.borrow_mut();
@@ -736,7 +788,7 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
     }
 }
 
-pub fn fmt_rx<'a>(b: &'a mut [u8; 80], addr: u32, button: u8, code: u32, rssi_dbm: i32) -> &'a str {
+pub fn fmt_rx(b: &mut [u8; 80], addr: u32, button: u8, code: u32, rssi_dbm: i32) -> &str {
     use core::fmt::Write;
     let mut w = Writer80 { buf: b, pos: 0 };
     let _ = write!(
@@ -747,9 +799,8 @@ pub fn fmt_rx<'a>(b: &'a mut [u8; 80], addr: u32, button: u8, code: u32, rssi_db
     core::str::from_utf8(&b[..n]).unwrap_or("")
 }
 
-
 /// Render a command that arrived over Zigbee, naming the slot it controls.
-pub fn fmt_zb_event<'a>(b: &'a mut [u8; 80], ev: ZbEvent) -> &'a str {
+pub fn fmt_zb_event(b: &mut [u8; 80], ev: ZbEvent) -> &str {
     use core::fmt::Write;
     let (slot_name, slot_index) = STATE.lock(|s| {
         let st = s.borrow();
@@ -761,7 +812,11 @@ pub fn fmt_zb_event<'a>(b: &'a mut [u8; 80], ev: ZbEvent) -> &'a str {
     });
     let mut w = Writer80 { buf: b, pos: 0 };
     if ev.slot == 0xFF {
-        let _ = write!(w, "zb: pairing -> {}", if ev.value != 0 { "on" } else { "off" });
+        let _ = write!(
+            w,
+            "zb: pairing -> {}",
+            if ev.value != 0 { "on" } else { "off" }
+        );
     } else {
         let _ = write!(w, "zb: slot {slot_index}");
         if !slot_name.is_empty() {
@@ -788,7 +843,7 @@ pub fn fmt_zb_event<'a>(b: &'a mut [u8; 80], ev: ZbEvent) -> &'a str {
     core::str::from_utf8(&b[..n]).unwrap_or("")
 }
 
-pub fn fmt2<'a>(b: &'a mut [u8; 80], a: u32, x: u32) -> &'a str {
+pub fn fmt2(b: &mut [u8; 80], a: u32, x: u32) -> &str {
     use core::fmt::Write;
     let mut w = Writer80 { buf: b, pos: 0 };
     let _ = write!(w, "paired remote 0x{a:05X} into slot {x}");
@@ -827,5 +882,3 @@ impl core::fmt::Write for Writer80<'_> {
         Ok(())
     }
 }
-
-

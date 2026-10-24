@@ -14,24 +14,23 @@ pub use report::*;
 use core::cell::RefCell;
 use core::sync::atomic::Ordering;
 
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex as CsMutex;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_time::Delay as AsyncDelay;
 use embassy_time::Timer;
 use esp_println::println;
-use zigbee::zdo::ClusterReply;
-use zigbee::zdo::ClusterRequest;
-use zigbee::zdo::ClusterRequestHandler;
-use zigbee_cluster_library::server::UnsupportedClusterResponder;
+use zigbee::CurrentPowerMode;
+use zigbee::CurrentPowerSourceLevel;
 use zigbee::DeviceConfig;
 use zigbee::LogicalType;
 use zigbee::NetworkConfig;
 use zigbee::PowerSource;
-use zigbee::CurrentPowerMode;
-use zigbee::CurrentPowerSourceLevel;
 use zigbee::TimingConfig;
 use zigbee::config::StackConfig;
 use zigbee::nwk::nib::CapabilityInformation;
+use zigbee::zdo::ClusterReply;
+use zigbee::zdo::ClusterRequest;
+use zigbee::zdo::ClusterRequestHandler;
 use zigbee::zdo::config::DiscoveryType;
 use zigbee::zdo::descriptor::DeviceDescriptorConfig;
 use zigbee::zdo::descriptor::EndpointDescriptor;
@@ -40,12 +39,13 @@ use zigbee::zdo::descriptor::PowerDescriptorConfig;
 use zigbee_cluster_library::clusters::general::basic;
 use zigbee_cluster_library::clusters::general::identify;
 use zigbee_cluster_library::profile;
+use zigbee_cluster_library::server::UnsupportedClusterResponder;
 use zigbee_types::IeeeAddress;
 
 use crate::config::Config;
-use crate::state::mark_all_state;
-use crate::state::REPORT_DIRTY;
 use crate::state::PAIRING_REPORT;
+use crate::state::REPORT_DIRTY;
+use crate::state::mark_all_state;
 
 // ==========================================================================
 // Zigbee layer
@@ -69,8 +69,10 @@ pub static EP_BUF: static_cell::StaticCell<[EndpointDescriptor<'static>; 9]> =
     static_cell::StaticCell::new();
 
 /// The slice handed to the stack, kept so `desc` can print it.
-pub static EP_LIST: CsMutex<CriticalSectionRawMutex, RefCell<Option<&'static [EndpointDescriptor<'static>]>>> =
-    CsMutex::new(RefCell::new(None));
+pub static EP_LIST: CsMutex<
+    CriticalSectionRawMutex,
+    RefCell<Option<&'static [EndpointDescriptor<'static>]>>,
+> = CsMutex::new(RefCell::new(None));
 
 pub fn master_descriptor() -> EndpointDescriptor<'static> {
     EndpointDescriptor {
@@ -110,8 +112,8 @@ pub fn build_endpoints(cfg: &Config) -> &'static [EndpointDescriptor<'static>] {
     let mut n = 0;
     buf[n] = master_descriptor();
     n += 1;
-    for i in 0..8 {
-        if cfg.slots[i].used() {
+    for (i, slot) in cfg.slots.iter().enumerate() {
+        if slot.used() {
             buf[n] = fan_descriptor(i);
             n += 1;
         }
@@ -154,7 +156,8 @@ pub static FAN6: FanEp<6> = FanEp;
 pub static FAN7: FanEp<7> = FanEp;
 
 /// Answers `UNSUPPORTED_CLUSTER` to every request no server claimed.
-pub static UNSUPPORTED: UnsupportedClusterResponder<'static> = UnsupportedClusterResponder::new(&[]);
+pub static UNSUPPORTED: UnsupportedClusterResponder<'static> =
+    UnsupportedClusterResponder::new(&[]);
 
 /// Dispatches to all cluster servers in turn (trait objects avoid a 40-deep tuple).
 pub struct Chain;
@@ -162,15 +165,42 @@ pub struct Chain;
 impl ClusterRequestHandler for Chain {
     fn handle(&self, r: &ClusterRequest<'_>, out: &mut [u8]) -> Option<ClusterReply> {
         const SRV: [&dyn ClusterRequestHandler; 37] = [
-            &BASIC_MASTER, &IDENTIFY, &PAIR_SW, &PAIRING,
-            &BASIC_F0, &FAN0, &PWR0, &FANDIR0,
-            &BASIC_F1, &FAN1, &PWR1, &FANDIR1,
-            &BASIC_F2, &FAN2, &PWR2, &FANDIR2,
-            &BASIC_F3, &FAN3, &PWR3, &FANDIR3,
-            &BASIC_F4, &FAN4, &PWR4, &FANDIR4,
-            &BASIC_F5, &FAN5, &PWR5, &FANDIR5,
-            &BASIC_F6, &FAN6, &PWR6, &FANDIR6,
-            &BASIC_F7, &FAN7, &PWR7, &FANDIR7,
+            &BASIC_MASTER,
+            &IDENTIFY,
+            &PAIR_SW,
+            &PAIRING,
+            &BASIC_F0,
+            &FAN0,
+            &PWR0,
+            &FANDIR0,
+            &BASIC_F1,
+            &FAN1,
+            &PWR1,
+            &FANDIR1,
+            &BASIC_F2,
+            &FAN2,
+            &PWR2,
+            &FANDIR2,
+            &BASIC_F3,
+            &FAN3,
+            &PWR3,
+            &FANDIR3,
+            &BASIC_F4,
+            &FAN4,
+            &PWR4,
+            &FANDIR4,
+            &BASIC_F5,
+            &FAN5,
+            &PWR5,
+            &FANDIR5,
+            &BASIC_F6,
+            &FAN6,
+            &PWR6,
+            &FANDIR6,
+            &BASIC_F7,
+            &FAN7,
+            &PWR7,
+            &FANDIR7,
             // last: anything nobody handled still gets an answer, so a
             // coordinator does not wait for a response that never comes
             &UNSUPPORTED,
@@ -179,7 +209,9 @@ impl ClusterRequestHandler for Chain {
     }
 }
 
-pub type ZbFlash = zigbee::storage::FlashStorage<embassy_embedded_hal::adapter::BlockingAsync<esp_storage::FlashStorage<'static>>>;
+pub type ZbFlash = zigbee::storage::FlashStorage<
+    embassy_embedded_hal::adapter::BlockingAsync<esp_storage::FlashStorage<'static>>,
+>;
 pub type ZbStack = zigbee::Stack<'static, zigbee_mac::esp::EspMlme<'static>, Chain, ZbFlash>;
 pub static STACK: static_cell::StaticCell<ZbStack> = static_cell::StaticCell::new();
 
@@ -200,7 +232,10 @@ pub fn stack_config(endpoints: &'static [EndpointDescriptor<'static>]) -> StackC
             discovery_type: DiscoveryType::default(),
             tc_link_key_exchange: true,
         },
-        TimingConfig { poll_interval_ms: 100, ..TimingConfig::default() },
+        TimingConfig {
+            poll_interval_ms: 100,
+            ..TimingConfig::default()
+        },
         DeviceDescriptorConfig {
             node: NodeDescriptorConfig {
                 frequency_band: 0x08,
@@ -275,4 +310,3 @@ pub async fn stack_task(stack: &'static ZbStack) {
     println!("zigbee stack stopped: {outcome:?}");
     esp_hal::system::software_reset();
 }
-

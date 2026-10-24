@@ -13,8 +13,8 @@ use esp_hal::gpio::Output;
 use esp_hal::spi::master::Spi;
 use esp_hal::time::Instant;
 
-use esp_fanbridge_protocol::expand_code;
 use esp_fanbridge_protocol::TX_PACKET_LEN;
+use esp_fanbridge_protocol::expand_code;
 
 use crate::state::TX_GAP_MS;
 use crate::state::TX_REPEATS;
@@ -63,13 +63,11 @@ pub const STX: u8 = 0x35;
 
 pub const FREQ_KHZ: u32 = 433_920;
 
-
 /// Symbol widths used for transmit.
 pub const T_SHORT: u32 = 400;
 pub const T_LONG: u32 = 1200;
 pub const FRAME_GAP_MS: u32 = 12;
 pub const REPEATS: u32 = 8;
-
 
 const CC1101_CONFIG: &[(u8, u8)] = &[
     (IOCFG2, 0x0D),
@@ -90,16 +88,15 @@ const CC1101_CONFIG: &[(u8, u8)] = &[
     (FOCCFG, 0x16),
     (BSCFG, 0x6C),
     (AGCCTRL2, 0x03),
-    (AGCCTRL1, 0x00),  // DN022: OOK wants 0x00, not the FSK default 0x40
+    (AGCCTRL1, 0x00), // DN022: OOK wants 0x00, not the FSK default 0x40
     (AGCCTRL0, 0x91),
-    (FREND1, 0xB6),    // DN022: RX filter > 101 kHz (ours is 203 kHz)
+    (FREND1, 0xB6), // DN022: RX filter > 101 kHz (ours is 203 kHz)
     (FREND0, 0x11),
     (FSCAL3, 0xE9),
     (FSCAL2, 0x2A),
     (FSCAL1, 0x00),
     (FSCAL0, 0x1F),
 ];
-
 
 pub fn wreg(spi: &mut Spi<'_, esp_hal::Blocking>, cs: &mut Output<'_>, addr: u8, val: u8) {
     cs.set_low();
@@ -245,8 +242,6 @@ pub const ASYNC_RX_REGS: &[(u8, u8)] = &[
     (MDMCFG2, 0x30),
 ];
 
-
-
 pub fn apply_regs(spi: &mut Spi<'_, esp_hal::Blocking>, cs: &mut Output<'_>, regs: &[(u8, u8)]) {
     for &(a, v) in regs {
         wreg(spi, cs, a, v);
@@ -282,7 +277,6 @@ pub async fn send_packet_frame(
     strobe(spi, cs, SCAL);
     Timer::after_millis(1).await;
 
-
     let start = Instant::now();
     for _ in 0..repeats {
         strobe(spi, cs, SFTX);
@@ -311,7 +305,6 @@ pub async fn send_packet_frame(
     enter_rx(spi, cs);
     elapsed
 }
-
 
 /// CC1101 RSSI register (0x34) to dBm, as in the datasheet.
 pub fn rssi_dbm(raw: u8) -> i32 {

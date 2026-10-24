@@ -79,11 +79,11 @@ fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
         core::hint::spin_loop();
     }
 }
-use esp_fanbridge_protocol::decode_frame;
-use esp_fanbridge_protocol::Seg;
 use esp_fanbridge_protocol::FRAME_GAP_US;
 use esp_fanbridge_protocol::MAX_SEG;
 use esp_fanbridge_protocol::NOISE_US;
+use esp_fanbridge_protocol::Seg;
+use esp_fanbridge_protocol::decode_frame;
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -145,18 +145,28 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
     let version = cc1101_init(&mut spi, &mut cs, &mut d);
     println!("CC1101 VERSION=0x{version:02x} (want 0x14) at {FREQ_KHZ} kHz");
     enter_rx(&mut spi, &mut cs);
-    println!("{paired} remote(s) configured, {n_endpoints} endpoint(s) advertised", n_endpoints = endpoints.len());
+    println!(
+        "{paired} remote(s) configured, {n_endpoints} endpoint(s) advertised",
+        n_endpoints = endpoints.len()
+    );
     if !cfg.device_name.is_empty() {
         println!("device name: {}", cfg.device_name.as_str());
     }
 
     // ---- Zigbee
-    let flash = embassy_embedded_hal::adapter::BlockingAsync::new(esp_storage::FlashStorage::new(peripherals.FLASH));
+    let flash = embassy_embedded_hal::adapter::BlockingAsync::new(esp_storage::FlashStorage::new(
+        peripherals.FLASH,
+    ));
     let storage = zb_stack::storage::init_with_flash(flash, ZIGBEE_FLASH).await;
     let ieee = esp_radio::ieee802154::Ieee802154::new(peripherals.IEEE802154);
     let mac = zigbee_mac::esp::EspMlme::new(ieee, esp_radio::ieee802154::Config::default());
     println!("Zigbee IEEE address: {:#018x}", mac.ieee_address());
-    let stack: &'static ZbStack = STACK.init(zb_stack::Stack::new(mac, stack_config(endpoints), Chain, storage));
+    let stack: &'static ZbStack = STACK.init(zb_stack::Stack::new(
+        mac,
+        stack_config(endpoints),
+        Chain,
+        storage,
+    ));
 
     spawner.spawn(stack_task(stack).expect("spawn stack_task"));
     spawner.spawn(announce_task(stack).expect("spawn announce_task"));
@@ -207,7 +217,10 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
                 if DEBUG_ON.load(Ordering::Relaxed) {
                     let mut b = [0u8; 64];
                     let pos = {
-                        let mut w = Writer { buf: &mut b, pos: 0 };
+                        let mut w = Writer {
+                            buf: &mut b,
+                            pos: 0,
+                        };
                         let _ = core::fmt::Write::write_fmt(
                             &mut w,
                             format_args!("rx rearm (marcstate=0x{marc:02x})"),
@@ -272,12 +285,19 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
             if DEBUG_ON.load(Ordering::Relaxed) {
                 let mut b = [0u8; 80];
                 let pos = {
-                    let mut w = Writer80 { buf: &mut b, pos: 0 };
+                    let mut w = Writer80 {
+                        buf: &mut b,
+                        pos: 0,
+                    };
                     let _ = core::fmt::Write::write_fmt(
                         &mut w,
                         format_args!(
                             "tx 0x{code:06X} via {} took {took} ms",
-                            if TX_PACKET.load(Ordering::Relaxed) { "packet" } else { "bit-bang" }
+                            if TX_PACKET.load(Ordering::Relaxed) {
+                                "packet"
+                            } else {
+                                "bit-bang"
+                            }
                         ),
                     );
                     w.pos
@@ -297,14 +317,20 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
             let mut b = [0u8; 80];
             {
                 use core::fmt::Write;
-                let mut w = Writer80 { buf: &mut b, pos: 0 };
+                let mut w = Writer80 {
+                    buf: &mut b,
+                    pos: 0,
+                };
                 let dbm = rssi_dbm(rssi);
                 let iocfg0 = rreg(&mut spi, &mut cs, IOCFG0);
                 let pktctl0 = rreg(&mut spi, &mut cs, PKTCTRL0);
                 let mdmcfg2 = rreg(&mut spi, &mut cs, MDMCFG2);
                 let raw = RAW_EDGES.swap(0, Ordering::Relaxed);
-                let _ = write!(w, "marcstate=0x{marc:02x} rssi={dbm}dBm iocfg0=0x{iocfg0:02x} pktctrl0=0x{pktctl0:02x} mdmcfg2=0x{mdmcfg2:02x} segs={n} raw={raw} gdo0={}", 
-                    u8::from(gdo0.is_high()));
+                let _ = write!(
+                    w,
+                    "marcstate=0x{marc:02x} rssi={dbm}dBm iocfg0=0x{iocfg0:02x} pktctrl0=0x{pktctl0:02x} mdmcfg2=0x{mdmcfg2:02x} segs={n} raw={raw} gdo0={}",
+                    u8::from(gdo0.is_high())
+                );
             }
             let txt = core::str::from_utf8(&b).unwrap_or("");
             console.outln(txt);
@@ -312,7 +338,12 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
         if CLOCK_REQ.swap(false, Ordering::Relaxed) {
             clock_on = !clock_on;
             strobe(&mut spi, &mut cs, SIDLE);
-            wreg(&mut spi, &mut cs, IOCFG0, if clock_on { 0x39 } else { 0x0D });
+            wreg(
+                &mut spi,
+                &mut cs,
+                IOCFG0,
+                if clock_on { 0x39 } else { 0x0D },
+            );
             enter_rx(&mut spi, &mut cs);
             console.outln(if clock_on {
                 "GDO0 = XOSC/192 clock (~135 kHz) - raw edges should explode"
@@ -324,16 +355,27 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
             let mut b = [0u8; 80];
             {
                 use core::fmt::Write;
-                let mut w = Writer80 { buf: &mut b, pos: 0 };
+                let mut w = Writer80 {
+                    buf: &mut b,
+                    pos: 0,
+                };
                 let _ = write!(w, "segs n={n}");
             }
             console.outln(core::str::from_utf8(&b).unwrap_or(""));
-            for i in 0..n.min(24) {
+            for (i, seg) in segs.iter().take(n.min(24)).enumerate() {
                 let mut b2 = [0u8; 80];
                 {
                     use core::fmt::Write;
-                    let mut w = Writer80 { buf: &mut b2, pos: 0 };
-                    let _ = write!(w, "  [{i}] {}us {}", segs[i].dt, if segs[i].high { "H" } else { "L" });
+                    let mut w = Writer80 {
+                        buf: &mut b2,
+                        pos: 0,
+                    };
+                    let _ = write!(
+                        w,
+                        "  [{i}] {}us {}",
+                        seg.dt,
+                        if seg.high { "H" } else { "L" }
+                    );
                 }
                 let t = core::str::from_utf8(&b2).unwrap_or("");
                 console.outln(t);
@@ -364,7 +406,10 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
                 let mut b = [0u8; 80];
                 {
                     use core::fmt::Write;
-                    let mut w = Writer80 { buf: &mut b, pos: 0 };
+                    let mut w = Writer80 {
+                        buf: &mut b,
+                        pos: 0,
+                    };
                     let total: u32 = segs[..n].iter().map(|x| x.dt).sum();
                     let _ = write!(w, "junk: n={n} total={total}us first={}us", segs[0].dt);
                 }
@@ -397,7 +442,10 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
                             let mut b = [0u8; 80];
                             {
                                 use core::fmt::Write;
-                                let mut w = Writer80 { buf: &mut b, pos: 0 };
+                                let mut w = Writer80 {
+                                    buf: &mut b,
+                                    pos: 0,
+                                };
                                 let _ = write!(w, "pair: got button=0x{btn:X} -> step now {step}");
                             }
                             let t = core::str::from_utf8(&b).unwrap_or("");
@@ -444,11 +492,11 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
             console.outln("restarting (requested)...");
             esp_hal::system::software_reset();
         }
-        if let Some(at) = restart_at_ms {
-            if t0.elapsed().as_millis() >= at {
-                console.outln("restarting...");
-                esp_hal::system::software_reset();
-            }
+        if let Some(at) = restart_at_ms
+            && t0.elapsed().as_millis() >= at
+        {
+            console.outln("restarting...");
+            esp_hal::system::software_reset();
         }
 
         // ---- LED: heartbeat, pairing, learned/failed, identify
