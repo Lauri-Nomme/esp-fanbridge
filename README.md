@@ -108,6 +108,7 @@ switch endpoints, and adds:
 | `sensor.…_paired_count` | how many remotes are stored |
 | `sensor.…_exposed_count` | how many of them currently have a Zigbee endpoint |
 | `binary_sensor.…_restart_required` | on when a pair/delete is waiting for a restart + re-interview |
+| `select.…_apply_pairing_change` | `apply` restarts the bridge, so a new/deleted remote becomes visible without touching the console |
 | `fan.…_<endpoint>` | the remote's fan: four speeds, on/off |
 | `select.…_direction_<endpoint>` | `in`, `out` or `auto` (the fan alternates by itself) |
 

@@ -44,6 +44,7 @@ use crate::state::mark_fan_mode;
 use crate::state::mark_pairing_switch;
 use crate::state::zb_event;
 use crate::state::REARM_COUNT;
+use crate::state::request_reboot_in;
 use crate::state::STATE;
 use crate::state::TX_REQ;
 use crate::zigbee::EP_FAN0;
@@ -356,6 +357,21 @@ impl ClusterServer for PairingEp {
             ),
             _ => return Status::UnsupportedAttribute,
         })
+    }
+
+    /// `reboot` (0x00) applies a pending pairing change: the endpoint set is
+    /// built at boot, so a new or deleted remote only becomes visible after a
+    /// restart. Handing this to the user as a button beats "now go and reboot it
+    /// from the console".
+    fn command(&self, cmd: ClusterCommand<'_>, _out: &mut [u8]) -> CommandOutcome {
+        match cmd.id.0 {
+            0x00 => {
+                // late enough that this response is on the air first
+                request_reboot_in(300);
+                CommandOutcome::Status(Status::Success)
+            }
+            _ => CommandOutcome::Status(Status::UnsupCommand),
+        }
     }
 }
 

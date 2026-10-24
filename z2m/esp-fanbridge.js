@@ -41,7 +41,10 @@ const PAIRING_CLUSTER = {
         restartRequired: {name: 'restartRequired', ID: 0x0003, type: 0x10, write: false},
         rxRearmCount: {name: 'rxRearmCount', ID: 0x0004, type: 0x21, write: false},
     },
-    commands: {},
+    commands: {
+        // apply a pending endpoint-set change and restart (0x00)
+        reboot: {name: 'reboot', ID: 0x00, parameters: []},
+    },
     commandsResponse: {},
 };
 
@@ -122,6 +125,12 @@ module.exports = {
             new exposes.Binary('restart_required', ea.STATE, true, false)
                 .withDescription('Pairing changed since boot; restart (or re-interview) to expose it')
                 .withLabel('Restart required'),
+            // The endpoints are built at boot, so a remote learned or deleted
+            // from the console only shows up after a restart. This is the button
+            // for that, instead of asking for a power cycle.
+            new exposes.Enum('apply_pairing_change', ea.SET, ['apply'])
+                .withLabel('Apply pairing change')
+                .withDescription('Restart the bridge so a new or deleted remote becomes visible'),
         ];
         for (const endpoint of onOffEndpoints(device)) {
             result.push(new exposes.Switch().withState('state').withEndpoint(String(endpoint)));
@@ -189,6 +198,14 @@ module.exports = {
         },
     ],
     toZigbee: [
+        {
+            key: ['apply_pairing_change'],
+            convertSet: async (entity, key, value) => {
+                if (value !== 'apply') return;
+                await entity.command('espPairing', 'reboot', {}, {});
+                return {state: {}};
+            },
+        },
         {
             key: ['direction'],
             convertSet: async (entity, key, value) => {

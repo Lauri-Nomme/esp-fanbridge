@@ -409,11 +409,15 @@ console line buffer grew to 96 bytes so a dump line fits.
 
 ### 35. Remove the local discovery patch (was #9) — **S**, waiting for a release
 
-### 36. "Apply pairing change" button — **M**
+### 36. "Apply pairing change" button — **done**
 
-The device could accept a manufacturer-specific command (reboot) so HA gets a
-button for `reboot`/`restart_required`, instead of the user needing the console
-after a pairing change.
+The `espPairing` cluster now answers command `0x00` (`reboot`): it schedules a
+restart 300 ms out, so the command's default response is on the air first, and
+the main loop does the reset. The converter exposes it as
+`select.…_apply_pairing_change` (`apply`) — this version of Zigbee2MQTT has no
+`exposes.Button`, so an enum action is the idiom here. Verified on hardware:
+selecting `apply` rebooted the device (console: `restarting (requested)...`),
+it rejoined and announced, and Zigbee2MQTT reported no error.
 
 ### 37. Names as read-only sensors — **rejected for now**
 
