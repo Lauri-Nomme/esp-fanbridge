@@ -371,7 +371,12 @@ A GitHub Actions workflow with the esp-rs toolchain, `cargo build --release` for
 `riscv32imac-unknown-none-elf`, `cargo fmt --check` and `clippy`. Catches
 "compiles only because of my local toolchain" regressions without hardware.
 
-### 29. Tagged releases with binaries — **S**
+### 29. Tagged releases with binaries — **done**
+
+`.github/workflows/release.yml` runs on a `v*` tag: protocol tests, firmware
+build, `espflash save-image --merge`, then a release with the merged `.bin`, the
+`.elf` and the matching converter `.js`. `docs/RELEASING.md` describes cutting
+one and flashing it. First tag: `v0.1.0`.
 
 Attach the `.bin`/`.elf` to a tag so flashing does not require the toolchain
 (`esptool`/`espflash` can write a bin directly).

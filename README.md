@@ -45,6 +45,13 @@ The `espflash` runner in `.cargo/config.toml` does the flashing and monitoring, 
 `cargo run` is all you need once the toolchain is in place. `Cargo.lock` is
 committed: the Zigbee crates are pulled from git by revision, so pinning matters.
 
+No toolchain at hand? Every tag publishes the firmware and the matching
+converter (see [`docs/RELEASING.md`](docs/RELEASING.md)):
+
+```sh
+espflash write-bin --port /dev/ttyACM0 0x0 esp-fanbridge-v0.1.0.bin
+```
+
 ## Console
 
 ```sh
