@@ -204,6 +204,13 @@ session.
 
 ## State visibility
 
+### 42. Report counters and an on-demand flush — **done**
+
+`status` carries `rep <ok>/<fail>` and `report` queues the full state flush that
+follows a (re)join. Both exist to separate "the device is not reporting" from
+"the coordinator is not listening" without waiting for a state change - the
+first question after any "HA shows nothing" report.
+
 ### 41. Retain speed and direction while the fan is off — **done**
 
 Today a powered-down fan loses its speed in Home Assistant: `FanMode` reports

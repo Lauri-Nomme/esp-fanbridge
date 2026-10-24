@@ -149,6 +149,12 @@ zb: slot 1 "lr-l" speed -> 2
   file. Compare with `z2m/esp-fanbridge.js` in this repository.
 * **A `zb:` line appears but the fan does nothing**: the Zigbee side is fine,
   go to [5](#5-the-fan-ignores-the-command).
+* **Is the device reporting at all?** `status` ends with `rep <ok>/<fail>`: reports
+  the coordinator acknowledged and attempts that had to be retried. `report`
+  queues a full state flush on demand - if `rep` climbs and nothing changes in HA,
+  the problem is downstream (converter, Zigbee2MQTT, HA), not the device. A
+  healthy device has one failure at boot (the first report races the join) and
+  then climbs only in `ok`.
 * **Value flips back with no error**: a report arrived carrying the old value -
   check `list` for what the device actually stored. If `list` shows the new
   value and HA does not, the report or the converter is at fault. `debug on`

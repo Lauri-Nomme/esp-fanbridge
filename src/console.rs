@@ -323,6 +323,7 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
             c.outln("  power <slot> <on|off>");
             c.outln("  raw <hex>            transmit a raw 24-bit code");
             c.outln("  status               uptime, counters, mode, frequency");
+            c.outln("  report               queue a full state report (check the reporting path)");
             c.outln("  stat                 chip state + RSSI");
             c.outln("  debug [on|off]       noisy diagnostics (no argument: show state)");
             c.outln("  desc                 show the advertised endpoint descriptors");
@@ -532,11 +533,13 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
                 let _ = core::fmt::Write::write_fmt(
                     &mut w,
                     format_args!(
-                        "up {}s | tx {} | rx {} | rearm {} | {} | {} kHz | debug {} | pairing {}",
+                        "up {}s | tx {} | rx {} | rearm {} | rep {}/{} | {} | {} kHz | debug {} | pairing {}",
                         UPTIME_MS.load(Ordering::Relaxed) / 1000,
                         TX_COUNT.load(Ordering::Relaxed),
                         RX_COUNT.load(Ordering::Relaxed),
                         REARM_COUNT.load(Ordering::Relaxed),
+                        REPORT_OK.load(Ordering::Relaxed),
+                        REPORT_FAIL.load(Ordering::Relaxed),
                         if TX_PACKET.load(Ordering::Relaxed) {
                             "packet"
                         } else {
@@ -558,6 +561,13 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
                 w.pos
             };
             c.outln(core::str::from_utf8(&b[..pos]).unwrap_or(""));
+        }
+        "report" => {
+            // the same flush that follows a (re)join, on demand: it is the
+            // quickest way to tell "the device is not reporting" from "the
+            // coordinator is not listening"
+            mark_all_state();
+            c.outln("full state report queued (watch `rep` in status)");
         }
         "stat" => {
             STAT_REQ.store(true, Ordering::Relaxed);
