@@ -42,6 +42,7 @@ mod config;
 mod console;
 mod led;
 mod pairing;
+mod panic_log;
 mod radio;
 mod state;
 mod zigbee;
@@ -58,6 +59,26 @@ use crate::zigbee::*;
 use zigbee_cluster_library::types::ZclEnum8;
 // `::zigbee` is the upstream stack crate; `crate::zigbee` is our layer on top.
 use ::zigbee as zb_stack;
+
+/// A panic is stored before the device stops, so the next boot can report it.
+///
+/// The console is often the only thing that knows a device in a cabinet rebooted
+/// at all, and by the time someone looks the explanation would be gone.
+#[panic_handler]
+fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
+    panic_log::record(UPTIME_MS.load(Ordering::Relaxed), info);
+    println!();
+    println!("====================== PANIC ======================");
+    println!("{info}");
+    println!();
+    println!("Backtrace:");
+    for frame in esp_backtrace::Backtrace::capture().frames() {
+        println!("0x{:x}", frame.program_counter());
+    }
+    loop {
+        core::hint::spin_loop();
+    }
+}
 use esp_fanbridge_protocol::decode_frame;
 use esp_fanbridge_protocol::Seg;
 use esp_fanbridge_protocol::FRAME_GAP_US;
@@ -102,6 +123,25 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
     STATE.lock(|s| s.borrow_mut().cfg = cfg);
 
     println!("=== esp-fanbridge {VERSION} (built {BUILD_DATE}) ===");
+    // the one thing worth knowing after an unplanned reset, printed before
+    // anything that could hang. The record is erased from the loop below, not
+    // here: an erase this early aborts the chip.
+    let mut panic_reported = false;
+    {
+        let mut text = [0u8; panic_log::TEXT_MAX];
+        if let Some((uptime_ms, len)) = panic_log::take(&mut text) {
+            // the stored text is "panicked at <where>:\n<message>"; one console
+            // line is easier to read and to copy into a bug report
+            for b in &mut text[..len] {
+                if *b == b'\n' || *b == b'\r' {
+                    *b = b' ';
+                }
+            }
+            let reason = core::str::from_utf8(&text[..len]).unwrap_or("<unreadable>");
+            println!("last panic after {}s: {reason}", uptime_ms / 1000);
+            panic_reported = true;
+        }
+    }
     let version = cc1101_init(&mut spi, &mut cs, &mut d);
     println!("CC1101 VERSION=0x{version:02x} (want 0x14) at {FREQ_KHZ} kHz");
     enter_rx(&mut spi, &mut cs);
@@ -142,6 +182,12 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
     let mut raw_prev = gdo0.is_high();
 
     loop {
+        // ---- retire the panic record once the scheduler is up
+        if panic_reported {
+            panic_reported = false;
+            panic_log::clear();
+        }
+
         // ---- console
         if let Some(line) = console.poll() {
             let s = cmd_str(&line);

@@ -13,6 +13,7 @@ esp32c6 = [
     "esp-backtrace/esp32c6",
     "esp-bootloader-esp-idf/esp32c6",
     "esp-hal/esp32c6",
+    "esp-println/esp32c6",
     "esp-radio/esp32c6",
     "esp-rtos/esp32c6",
     "esp-storage/esp32c6",
@@ -23,7 +24,9 @@ esp32c6 = [
 # pure protocol logic, kept in its own crate so it can be unit tested on a host
 esp-fanbridge-protocol = { path = "protocol" }
 esp-alloc = { version = "0.10.0" }
-esp-backtrace = { version = "0.19.0", features = ["panic-handler", "println"] }
+# no `panic-handler`: the firmware installs its own so the panic can be
+# persisted to flash before the reset, and reuses `Backtrace` for the addresses
+esp-backtrace = { version = "0.19.0", features = ["println"] }
 esp32c6-pac = { package = "esp32c6", version = "=0.23.2", optional = true }
 esp-bootloader-esp-idf = { version = "0.5.0" }
 esp-hal = { version = "1.1.0", features = ["log-04", "unstable"] }
