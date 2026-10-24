@@ -431,10 +431,13 @@ Device-side names stay in the console only. Revisit only if a real need appears.
 
 ## Docs
 
-### 38. Wiring diagram in the repo — **S**
+### 38. Wiring diagram in the repo — **done**
 
-`WIRING.md` (CSN/SCK/MOSI/MISO/GDO0/power, plus the friction-fit fix) lives in
-`c6/hw/` and is not shipped with the firmware repo.
+`docs/WIRING.md`: parts, the pin map with the silkscreened numbers, an ASCII
+diagram, the two ways to destroy the module (5 V, and the 2×4 header inside one
+breadboard column), the friction-fit problem, and a power-up checklist built
+around the values `stat` actually prints. Text only - the photos stay in the
+hardware notes rather than adding 60 MB to this repository.
 
 ### 39. Troubleshooting decision tree — **S**
 
