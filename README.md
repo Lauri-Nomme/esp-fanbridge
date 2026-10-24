@@ -55,6 +55,8 @@ sudo minicom -D /dev/ttyACM0 -b 115200      # Ctrl-A W to wrap, Ctrl-A X to exit
 |---|---|
 | `list` | show paired remotes (slot, address, speed, direction, power, name) |
 | `slots` | raw dump of all eight slots + the paired count (also shows empty ones) |
+| `cfg dump` | print the 512-byte config image as hex — a backup |
+| `cfg load` | paste those lines back (finish with a line containing `end`) and save |
 | `pair` | learn a new remote: press **speed 1 → 2 → 3 → 4** on it |
 | `cancel` | abort pairing |
 | `del <slot>` | forget a remote |
@@ -139,6 +141,11 @@ zb: slot 0 "lr-r" direction -> in
 zb: slot 0 "lr-r" power -> off
 zb: pairing -> on
 ```
+
+`cfg dump` / `cfg load` move a pairing between boards, or let you undo a bad
+`name`/`del` without re-pairing: the image carries the magic, version, checksum
+and every slot, and a corrupt paste is rejected rather than written, so the
+device never loses its remotes to a typo.
 
 `slots` complements `list`: it prints all eight slots with their raw address and
 the `used` flag, which makes a slot that exists but has no endpoint obvious.
