@@ -331,11 +331,16 @@ short patterns so pairing can be done without the console.
 
 ### 22. Answer ZDO `Bind_req` — **already done by the stack** (see round 1, #22)
 
-### 23. `fanModeSequence` attribute — **S**
+### 23. `fanModeSequence` attribute — **done**
 
-ZCL 4.4.2.2.2 (`0x0202` cluster, attribute `0x0001`) declares which mode
-sequences the device supports. We implement `Off/Low/Medium/High/On`; declaring
-it is cheap and helps coordinators reason about the fan.
+Served as `0x00` (Low/Med/High). ZCL marks the attribute required, and the
+interesting decision is the value: the fan has four speeds, but only three are
+standard modes - the fourth is ZCL `on`, which no sequence value covers. The ZCL
+default `0x02` claims `Low/Med/High/Auto`, an `auto` mode this fan does not have,
+so `0x00` is the closest true statement. `on` is still accepted.
+
+Verified end to end: a temporary read from Zigbee2MQTT after a device announce
+returned `fanModeSequence=0` (the read is not part of the shipped converter).
 
 ### 24. Make Identify blink the LED — **S**
 
