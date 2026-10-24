@@ -69,6 +69,39 @@ Raw example — one captured frame (durations in µs):
 
 24 pairs + trailing 403 µs = `0x1A5F02` (speed 1, remote 1).
 
+### Reference waveform
+
+The numbers above are nominal. This is what a real remote put on the air, from
+the A/B capture (202 frames, `n=49` segments each, sampled by `esp-ookcapture`
+at 8 µs):
+
+| | nominal | measured | spread over 24 pulses | mean |
+|---|---|---|---|---|
+| short pulse | 400 µs | **375–425 µs** | 50 µs | 400.1 µs |
+| long pulse | 1200 µs | **1183–1219 µs** | 36 µs | 1197.5 µs |
+| trailing high | 400 µs | 403 µs | - | - |
+| frame (49 segments) | 38.8 ms | **38.75 ms** | - | - |
+| inter-frame gap | ~12 ms | ~12 ms | - | - |
+
+So the remote is within ±6 % of nominal and the *ratio* is what matters, not the
+absolute width. Our own transmitter is within a few microseconds of these values
+(bit-bang: the same delays in software; packet mode: 100.07 µs per bit, see
+[`PACKET-TX.md`](PACKET-TX.md)), and the decoder's acceptance window is
+deliberately wide around them:
+
+| Check | Window |
+|---|---|
+| short symbol | 250–650 µs |
+| long symbol | 850–1800 µs |
+| pairs per frame | exactly 24, each one short and one long |
+| frame total | 33–45 ms |
+
+A frame that decodes but whose pulses sit near a window edge is a receiver
+problem (level, distance, antenna), not a decoding one. `dump` prints the last
+capture's raw edges, and `rx …` prints the decoded code with its RSSI - comparing
+those two against this table is the fastest way to tell "our TX is wrong" from
+"the fan is not listening".
+
 ---
 
 ## 3. Hardware
