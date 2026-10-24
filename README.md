@@ -13,6 +13,7 @@ the fan — and pairing/state survives reboots.
 * Radio: CC1101 on SPI, 433.92 MHz ASK/OOK
 * Device: sleepy end device, ZCL `Fan Control (0x0202)` per learned remote
 
+Wiring, power-up checks and the traps: [`docs/WIRING.md`](docs/WIRING.md).
 Design notes and the full reverse-engineering story: [`docs/DESIGN.md`](docs/DESIGN.md)
 and [`docs/PROTOCOL.md`](docs/PROTOCOL.md). How the PWM waveform is turned into a
 bitstream the CC1101 can send by itself: [`docs/PACKET-TX.md`](docs/PACKET-TX.md).
