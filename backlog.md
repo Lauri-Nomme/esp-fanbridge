@@ -204,6 +204,15 @@ session.
 
 ## State visibility
 
+### 43. Tests for the converter's payload mapping — **done**
+
+`z2m/test.js`, 16 checks against the real `zigbee-herdsman-converters` (pinned in
+`z2m/package.json`), covering the two bugs that actually reached the fan - a
+`state` write going to FanMode on an endpoint without a fan controller, and a
+stopped fan reporting speed 0 - plus the speed 4 ↔ `on` mapping, direction
+values, the pairing payload, clamping, and the exposes of a device with and
+without endpoints. CI runs it in its own job.
+
 ### 42. Report counters and an on-demand flush — **done**
 
 `status` carries `rep <ok>/<fail>` and `report` queues the full state flush that

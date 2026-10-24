@@ -121,6 +121,13 @@ switch endpoints, and adds:
 | `fan.…_<endpoint>` | the remote's fan: four speeds, on/off |
 | `select.…_direction_<endpoint>` | `in`, `out` or `auto` (the fan alternates by itself) |
 
+The converter has its own tests (payload mapping, endpoint dispatch, exposes):
+
+```sh
+npm install --prefix z2m     # fetches the pinned zigbee-herdsman-converters
+node z2m/test.js
+```
+
 The converter also watches for `deviceAnnounce`: if the device reports a
 different number of exposed remotes than the coordinator has cached (which
 happens after pairing or deleting one, once the firmware has restarted), it asks

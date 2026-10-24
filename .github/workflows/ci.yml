@@ -19,6 +19,21 @@ jobs:
       - name: Format, lint and test
         run: LINT=1 ./protocol/run-tests.sh
 
+  converter:
+    name: converter tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install the converter's dependency
+        run: npm install --prefix z2m
+      # the mapping bugs that reached the fan lived here: which cluster a `state`
+      # write goes to, and what a stopped fan reports about its speed
+      - name: Test
+        run: node z2m/test.js
+
   firmware:
     name: firmware build
     runs-on: ubuntu-latest
