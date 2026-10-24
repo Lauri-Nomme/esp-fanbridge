@@ -23,6 +23,14 @@ git tag -a v0.2.0 -m "v0.2.0"
 git push origin v0.2.0
 ```
 
+The workflow publishes a boilerplate body (what the files are and how to flash
+them). Replace it with the release's own notes once the run is green, otherwise
+the releases all read the same:
+
+```sh
+gh release edit v0.2.0 --notes-file notes.md
+```
+
 Watch the run, then check the assets: the `.app.bin` should be roughly the size
 of the application (under a megabyte today), and the `.full.bin` is padded to the
 whole flash — **4 MiB** on this board. A padded size of 8 MiB means the flash size
