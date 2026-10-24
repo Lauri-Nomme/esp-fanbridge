@@ -387,10 +387,14 @@ frequency in one line — the first thing to ask a device when debugging.
 `set <slot> repeats 12`, `set <slot> gap 200`, `set <slot> power 0x60`: expose
 what #18 stores without a reflash.
 
-### 33. Config backup/restore — **S**
+### 33. Config backup/restore — **done**
 
-`cfg dump` prints the 512-byte config as hex; `cfg load <hex>` restores it. Makes
-"re-pair once, flash often" cheap.
+`cfg dump` prints the 512-byte image as hex (32 bytes per line with an offset);
+`cfg load` puts the console into paste mode, `end` commits. The image is
+validated (magic, version, checksum) before anything is written, so a truncated
+or mistyped paste changes nothing. Verified on hardware: a clobbered fan name
+was restored from a dump, and a dump with one digit flipped was refused. The
+console line buffer grew to 96 bytes so a dump line fits.
 
 ## Z2M / Home Assistant
 

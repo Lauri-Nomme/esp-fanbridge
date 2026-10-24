@@ -12,25 +12,50 @@ use crate::zigbee::*;
 use zigbee_cluster_library::server::ClusterServer;
 use zigbee_cluster_library::types::AttributeId;
 use crate::config::save_config;
+use crate::config::Config;
 use crate::config::Name;
+use crate::config::CFG_BYTES;
 use crate::config::NAME_MAX;
 use crate::config::Slot;
 use crate::pairing::*;
 use crate::radio::*;
 use crate::state::*;
 
+/// Longest console line. A `cfg dump` line is a 5-character offset plus 64
+/// hex digits, so the buffer has to be wider than the classic terminal line.
+pub const LINE_LEN: usize = 96;
+
+/// Staging area for `cfg load`, which is pasted in as several lines.
+struct CfgStage {
+    image: [u8; CFG_BYTES],
+    len: usize,
+    active: bool,
+}
+
+impl CfgStage {
+    const fn new() -> Self {
+        Self {
+            image: [0; CFG_BYTES],
+            len: 0,
+            active: false,
+        }
+    }
+}
+
 pub struct Console<'d> {
     usb: UsbSerialJtag<'d, esp_hal::Blocking>,
-    line: [u8; 64],
+    line: [u8; LINE_LEN],
     n: usize,
+    staging: CfgStage,
 }
 
 impl<'d> Console<'d> {
     pub fn new(usb: UsbSerialJtag<'d, esp_hal::Blocking>) -> Self {
         Self {
             usb,
-            line: [0; 64],
+            line: [0; LINE_LEN],
             n: 0,
+            staging: CfgStage::new(),
         }
     }
 
@@ -43,7 +68,7 @@ impl<'d> Console<'d> {
         self.out("\r\n");
     }
 
-    pub fn poll(&mut self) -> Option<[u8; 64]> {
+    pub fn poll(&mut self) -> Option<[u8; LINE_LEN]> {
         loop {
             match self.usb.read_byte() {
                 Ok(b) => {
@@ -51,12 +76,12 @@ impl<'d> Console<'d> {
                         if self.n == 0 {
                             continue;
                         }
-                        let mut l = [0u8; 64];
+                        let mut l = [0u8; LINE_LEN];
                         l[..self.n].copy_from_slice(&self.line[..self.n]);
                         let n = self.n;
                         self.n = 0;
                         self.out("\r\n");
-                        let mut out = [0u8; 64];
+                        let mut out = [0u8; LINE_LEN];
                         out[..n].copy_from_slice(&l[..n]);
                         // null-terminate marker by returning length via first 0? keep simple:
                         return Some(out);
@@ -65,7 +90,7 @@ impl<'d> Console<'d> {
                             self.n -= 1;
                             self.out("\x08 \x08");
                         }
-                    } else if self.n < 63 && b >= 32 && b < 127 {
+                    } else if self.n < LINE_LEN - 1 && b >= 32 && b < 127 {
                         self.line[self.n] = b;
                         self.n += 1;
                         let s = [b];
@@ -78,8 +103,8 @@ impl<'d> Console<'d> {
     }
 }
 
-pub fn cmd_str(line: &[u8; 64]) -> &str {
-    let end = line.iter().position(|&c| c == 0).unwrap_or(64);
+pub fn cmd_str(line: &[u8; LINE_LEN]) -> &str {
+    let end = line.iter().position(|&c| c == 0).unwrap_or(LINE_LEN);
     core::str::from_utf8(&line[..end]).unwrap_or("")
 }
 
@@ -158,7 +183,122 @@ pub fn format_slot<'a>(b: &'a mut [u8; 96], i: usize, sl: &Slot) -> &'a str {
     core::str::from_utf8(&b[..n]).unwrap_or("")
 }
 
+const HEX: &[u8; 16] = b"0123456789abcdef";
+
+impl Console<'_> {
+    /// Print the whole config image as hex, 32 bytes per line with a byte
+    /// offset. Feeding the lines back into `cfg load` restores it.
+    fn cfg_dump(&mut self) {
+        let image = STATE.lock(|s| s.borrow().cfg.bytes());
+        let mut b = [0u8; LINE_LEN];
+        for (i, chunk) in image.chunks(32).enumerate() {
+            let off = i * 32;
+            let mut pos = 0;
+            for shift in [8u32, 4, 0] {
+                b[pos] = HEX[((off >> shift) & 0xF) as usize];
+                pos += 1;
+            }
+            b[pos] = b':';
+            pos += 1;
+            for byte in chunk {
+                b[pos] = HEX[(byte >> 4) as usize];
+                pos += 1;
+                b[pos] = HEX[(byte & 0xF) as usize];
+                pos += 1;
+            }
+            let text = core::str::from_utf8(&b[..pos]).unwrap_or("");
+            self.outln(text);
+        }
+        self.outln("paste these lines after `cfg load`, then `end`");
+    }
+
+    /// One pasted line of a `cfg load`: hex pairs, with or without the offset
+    /// prefix that [`Self::cfg_dump`] prints. `end` (or `.`) commits.
+    fn cfg_feed(&mut self, line: &str) {
+        let line = line.trim();
+        if line.eq_ignore_ascii_case("end") || line == "." {
+            self.cfg_commit();
+            return;
+        }
+        let mut body = line;
+        if let Some((head, rest)) = line.split_once(':') {
+            if !head.is_empty()
+                && head.len() <= 4
+                && head.chars().all(|c| c.is_ascii_hexdigit())
+            {
+                body = rest;
+            }
+        }
+        // parse the line whole, so a typo cannot leave half a line behind
+        let mut chunk = [0u8; 48];
+        let mut n = 0;
+        let mut hi: Option<u8> = None;
+        for ch in body.chars() {
+            let Some(v) = ch.to_digit(16) else { continue };
+            let v = v as u8;
+            match hi.take() {
+                Some(h) => {
+                    if n == chunk.len() {
+                        self.outln("cfg load: line too long, ignored");
+                        return;
+                    }
+                    chunk[n] = (h << 4) | v;
+                    n += 1;
+                }
+                None => hi = Some(v),
+            }
+        }
+        if hi.is_some() {
+            self.outln("cfg load: odd number of hex digits, line ignored");
+            return;
+        }
+        if self.staging.len + n > CFG_BYTES {
+            self.outln("cfg load: image longer than 512 bytes, line ignored");
+            return;
+        }
+        self.staging.image[self.staging.len..self.staging.len + n].copy_from_slice(&chunk[..n]);
+        self.staging.len += n;
+    }
+
+    fn cfg_commit(&mut self) {
+        self.staging.active = false;
+        let image = self.staging.image;
+        let Some(cfg) = Config::from_bytes(&image) else {
+            self.outln("cfg load: not a valid image (magic, version or checksum wrong) - nothing changed");
+            return;
+        };
+        let (saved, count, restart) = STATE.lock(|s| {
+            let mut st = s.borrow_mut();
+            st.cfg = cfg;
+            let saved = save_config(&st.cfg);
+            (saved, st.paired_count(), st.restart_required())
+        });
+        // the console is the source of this state, so everything may have moved
+        mark_all_state();
+        let mut b = [0u8; 96];
+        let pos = {
+            let mut w = Writer96 { buf: &mut b, pos: 0 };
+            let _ = core::fmt::Write::write_fmt(
+                &mut w,
+                format_args!(
+                    "cfg load: {count} remote(s){}, {}",
+                    if restart { ", restart to expose the new endpoints" } else { "" },
+                    if saved { "saved" } else { "SAVE FAILED" },
+                ),
+            );
+            w.pos
+        };
+        let text = core::str::from_utf8(&b[..pos]).unwrap_or("");
+        self.outln(text);
+    }
+}
+
 pub fn handle_command(c: &mut Console<'_>, line: &str) {
+    // while a config is being pasted every line belongs to it
+    if c.staging.active {
+        c.cfg_feed(line);
+        return;
+    }
     let mut it = line.split_whitespace();
     let cmd = it.next().unwrap_or("");
     match cmd {
@@ -184,6 +324,8 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
             c.outln("  txmode [packet|async] show or switch how frames are transmitted");
             c.outln("  repeats [n]          frames per command (and show gap)");
             c.outln("  slots                raw dump of all eight slots");
+            c.outln("  cfg dump             print the config image as hex (backup)");
+            c.outln("  cfg load             paste a dump back, then a line with end");
             c.outln("  identify <secs>      blink the LED like the coordinator's identify");
             c.outln("  reboot               restart (needed after pair/del: the endpoint set is fixed at boot)");
         }
@@ -509,6 +651,15 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
                 Some(_) => c.outln("usage: txmode [packet|async]"),
             }
         }
+        "cfg" => match it.next() {
+            Some("dump") => c.cfg_dump(),
+            Some("load") => {
+                c.staging = CfgStage::new();
+                c.staging.active = true;
+                c.outln("cfg load: paste the lines from `cfg dump`, then `end`");
+            }
+            _ => c.outln("usage: cfg dump | cfg load"),
+        },
         "identify" => {
             // start the same identification a coordinator can request
             match it.next().and_then(|v| v.parse::<u16>().ok()) {
