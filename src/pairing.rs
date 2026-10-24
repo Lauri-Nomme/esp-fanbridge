@@ -7,11 +7,11 @@
 
 use zigbee_cluster_library::types::ZclEnum8;
 
-use crate::config::save_config;
 use crate::config::Slot;
+use crate::config::save_config;
+use crate::state::STATE;
 use crate::state::mark_direction;
 use crate::state::mark_fan_mode;
-use crate::state::STATE;
 
 pub const BTN_SPEED1: u8 = 0x2;
 pub const BTN_SPEED2: u8 = 0x1;
@@ -246,4 +246,3 @@ pub fn on_frame(addr: u32, button: u8, now_ms: u64) -> Ev {
         Ev::None
     })
 }
-

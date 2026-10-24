@@ -365,7 +365,16 @@ crate (no esp dependencies) allows `cargo test` on the workstation and protects
 the config migration and the 49-byte expansion, which are exactly the parts that
 broke unnoticed.
 
-### 28. CI: build + clippy + fmt — **S/M**
+### 28. CI: build + clippy + fmt — **done**
+
+CI now runs `cargo fmt --check` and `cargo clippy --release -- -D warnings` for
+the firmware, and the protocol job runs both from the temp directory the tests
+already use (`LINT=1 ./protocol/run-tests.sh`). Getting there meant one sweep:
+`cargo fmt` across the tree (93 hunks, no semantic change) and the 16 clippy
+warnings - collapsible `if`s, redundant references and casts, three `for i in
+0..8` loops that could iterate, one useless operation. Verified after the sweep
+on hardware: `list`, `desc`, `slots`, `cfg dump`, `status` all behave, and the
+build is warning-free.
 
 A GitHub Actions workflow with the esp-rs toolchain, `cargo build --release` for
 `riscv32imac-unknown-none-elf`, `cargo fmt --check` and `clippy`. Catches

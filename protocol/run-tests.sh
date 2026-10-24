@@ -12,4 +12,10 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
 cd "$tmp"
+# format and lints run from the same vantage point, so a caller needs the tools
+# installed but not the ESP target
+if [ -n "$LINT" ]; then
+    cargo fmt --manifest-path "$here/Cargo.toml" --check
+    cargo clippy --manifest-path "$here/Cargo.toml" --all-targets -- -D warnings
+fi
 exec cargo test --manifest-path "$here/Cargo.toml" "$@"

@@ -11,15 +11,15 @@ use core::sync::atomic::AtomicBool;
 use core::sync::atomic::AtomicU32;
 use core::sync::atomic::Ordering;
 
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex as CsMutex;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 
-use crate::zigbee::advertised;
+use crate::config::Config;
 use crate::pairing::Stage;
 use crate::radio::FRAME_GAP_MS;
 use crate::radio::REPEATS;
-use crate::config::Config;
+use crate::zigbee::advertised;
 
 pub struct State {
     pub cfg: Config,
@@ -147,7 +147,10 @@ pub static REBOOT_AT_MS: AtomicU32 = AtomicU32::new(0);
 
 /// Ask for a restart in `delay_ms`, unless one is already pending.
 pub fn request_reboot_in(delay_ms: u32) {
-    let at = UPTIME_MS.load(Ordering::Relaxed).saturating_add(delay_ms).max(1);
+    let at = UPTIME_MS
+        .load(Ordering::Relaxed)
+        .saturating_add(delay_ms)
+        .max(1);
     REBOOT_AT_MS.store(at, Ordering::Relaxed);
 }
 
@@ -163,4 +166,3 @@ pub static TX_GAP_MS: AtomicU32 = AtomicU32::new(FRAME_GAP_MS);
 pub static DEBUG_ON: AtomicBool = AtomicBool::new(false);
 /// counts every raw level change on GDO0, including sub-noise glitches
 pub static RAW_EDGES: AtomicU32 = AtomicU32::new(0);
-

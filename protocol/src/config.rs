@@ -136,7 +136,8 @@ impl Config {
         let mut b = [0u8; CFG_BYTES];
         b[0..4].copy_from_slice(&self.magic.to_le_bytes());
         b[4..8].copy_from_slice(&version.to_le_bytes());
-        self.device_name.write(&mut b[DEVICE_NAME_OFF..][..NAME_MAX]);
+        self.device_name
+            .write(&mut b[DEVICE_NAME_OFF..][..NAME_MAX]);
         for (i, s) in self.slots.iter().enumerate() {
             let o = SLOTS_OFF + i * SLOT_SIZE;
             // the format only carries 20 address bits, and the checksum is
@@ -278,7 +279,11 @@ mod tests {
         let mut old = [0u8; 128];
         old[0..4].copy_from_slice(&CFG_MAGIC.to_le_bytes());
         old[4..8].copy_from_slice(&1u32.to_le_bytes());
-        let slots = [(0x191D0u32, 3u8, 0u8, 1u8), (0x06800, 1, 1, 0), (0, 0, 0, 0)];
+        let slots = [
+            (0x191D0u32, 3u8, 0u8, 1u8),
+            (0x06800, 1, 1, 0),
+            (0, 0, 0, 0),
+        ];
         for (i, (addr, speed, dir, power)) in slots.iter().enumerate() {
             let o = 8 + i * 8;
             old[o..o + 4].copy_from_slice(&addr.to_le_bytes());
@@ -331,7 +336,11 @@ mod tests {
         assert!(name.set("kitchen"));
         assert_eq!(name.as_str(), "kitchen");
         assert!(!name.set(&"x".repeat(NAME_MAX + 1)));
-        assert_eq!(name.as_str(), "kitchen", "a rejected name must not change the old one");
+        assert_eq!(
+            name.as_str(),
+            "kitchen",
+            "a rejected name must not change the old one"
+        );
     }
 
     #[test]

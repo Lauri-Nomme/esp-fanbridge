@@ -104,7 +104,11 @@ pub fn expand_code(code: u32) -> [u8; TX_PACKET_LEN as usize] {
     let mut out = [0u8; TX_PACKET_LEN as usize];
     let mut pos = 0usize;
     for i in (0..24).rev() {
-        let (high, low) = if (code >> i) & 1 == 1 { (12, 4) } else { (4, 12) };
+        let (high, low) = if (code >> i) & 1 == 1 {
+            (12, 4)
+        } else {
+            (4, 12)
+        };
         for _ in 0..high {
             put_bit(&mut out, &mut pos, true);
         }
@@ -136,7 +140,10 @@ pub fn segments_of_expanded(frame: &[u8]) -> ([Seg; MAX_SEG], usize) {
             len += 1;
         }
         if n < MAX_SEG {
-            segs[n] = Seg { dt: len as u32 * TX_BIT_US, high: one };
+            segs[n] = Seg {
+                dt: len as u32 * TX_BIT_US,
+                high: one,
+            };
             n += 1;
         }
         bit += len;
@@ -153,7 +160,10 @@ mod tests {
     fn expands_the_documented_example() {
         let frame = expand_code(0x068002);
         assert_eq!(frame.len(), 49);
-        assert_eq!(&frame[..8], &[0xF0, 0x00, 0xF0, 0x00, 0xF0, 0x00, 0xF0, 0x00]);
+        assert_eq!(
+            &frame[..8],
+            &[0xF0, 0x00, 0xF0, 0x00, 0xF0, 0x00, 0xF0, 0x00]
+        );
         // 24 symbols * 16 bits + 4 trailing bits = 392 bits = 49 bytes exactly
         assert_eq!(TX_PACKET_LEN, 49);
     }
@@ -170,7 +180,14 @@ mod tests {
 
     #[test]
     fn expansion_round_trips_through_the_decoder() {
-        for code in [0x068002u32, 0x191D07, 0x1A5F0A, 0x123457, 0xFFFFFF, 0x000001] {
+        for code in [
+            0x068002u32,
+            0x191D07,
+            0x1A5F0A,
+            0x123457,
+            0xFFFFFF,
+            0x000001,
+        ] {
             let (segs, n) = segments_of_expanded(&expand_code(code));
             assert_eq!(decode_frame(&segs[..n]), Some(code), "code 0x{code:06X}");
         }
@@ -196,14 +213,20 @@ mod tests {
         ];
         let mut segs = [Seg { dt: 0, high: false }; MAX_SEG];
         for (i, dt) in edges.iter().enumerate() {
-            segs[i] = Seg { dt: *dt, high: i % 2 == 0 };
+            segs[i] = Seg {
+                dt: *dt,
+                high: i % 2 == 0,
+            };
         }
         assert_eq!(decode_frame(&segs[..49]), Some(0x191D07));
     }
 
     #[test]
     fn noise_is_not_a_frame() {
-        let segs = [Seg { dt: 120, high: true }; 60];
+        let segs = [Seg {
+            dt: 120,
+            high: true,
+        }; 60];
         assert_eq!(decode_frame(&segs), None);
     }
 }

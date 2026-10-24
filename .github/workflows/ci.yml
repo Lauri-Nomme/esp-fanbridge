@@ -12,11 +12,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust
-        run: rustup toolchain install stable --profile minimal
-      # The decoder, the packet-mode expansion and the frame boundaries are pure
-      # logic; these are the tests that catch a regression without hardware.
-      - name: Test
-        run: ./protocol/run-tests.sh
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      # The decoder, the packet-mode expansion, the frame boundaries and the
+      # config format are pure logic; these are the tests that catch a regression
+      # without hardware. `LINT=1` also checks formatting and lints.
+      - name: Format, lint and test
+        run: LINT=1 ./protocol/run-tests.sh
 
   firmware:
     name: firmware build
@@ -26,6 +27,11 @@ jobs:
       - name: Install the ESP32-C6 toolchain
         run: |
           rustup toolchain install nightly --profile minimal \
-            --component rust-src --target riscv32imac-unknown-none-elf
+            --component rust-src --component rustfmt --component clippy \
+            --target riscv32imac-unknown-none-elf
+      - name: Format
+        run: cargo fmt --check
+      - name: Lint
+        run: cargo clippy --release -- -D warnings
       - name: Build
         run: cargo build --release
