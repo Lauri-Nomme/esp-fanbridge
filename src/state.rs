@@ -53,7 +53,7 @@ impl State {
     }
 
     pub fn paired_count(&self) -> u8 {
-        self.cfg.slots.iter().filter(|s| s.used()).count() as u8
+        self.cfg.paired_count()
     }
 
     /// Remotes that currently have an endpoint (the set is fixed at boot).

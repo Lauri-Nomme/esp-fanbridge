@@ -7,6 +7,8 @@
 
 #![no_std]
 
+pub mod config;
+
 /// Ignore edges shorter than this (demodulator noise).
 pub const NOISE_US: u32 = 100;
 /// Silence that ends a frame.
