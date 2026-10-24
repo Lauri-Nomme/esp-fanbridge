@@ -142,24 +142,37 @@ Evidence: `evidence/fanbridge-*.txt`.
 
 ## 8. Known issues / next steps
 
-1. **Z2M needs the patch** until #33435 merges.
-2. **`Bind` requests are unanswered** — Z2M tries to bind `genOnOff` for
-   reporting and logs `bindRsp after 10000ms` errors, then retries. Our stack
-   doesn't implement the ZDO Bind request. Reporting is declared and accepted, but
-   we don't push reports yet, so Z2M's state is optimistic for the switches.
-3. **Sleepy end device.** `CapabilityInformation(0x80)` + 100 ms polling. Tried
-   rx-on-when-idle (`0x88`) and the stack produced `MacError(NoData)` and gave
-   up, so it stays sleepy. Consequence: interviews are timing-sensitive — if an
-   interview fails with *"can not get active endpoints"*, remove the device in
-   Z2M, wipe the device's Zigbee store, and let it rejoin with permit-join
-   already open (see §9 for the exact order).
-4. **Direction is a second endpoint** (switch) because ZCL has no direction
-   attribute in Fan Control. A converter could fold it into the fan entity later.
-5. **Real state reporting** — send `send_attribute_report` on change so HA tracks
-   physical-remote presses without polling.
-6. **End-to-end fan test.** The RF replay was verified as a technique and HA
-   control verified as a round trip; confirming an actual fan spinning for each
-   of the three remotes is the last physical check.
+Resolved since the first draft of this file, listed so nobody re-opens them:
+
+* **State reporting** is pushed from a task of its own with retries, for every
+  change from any source; `status` counts acknowledgements (`rep ok/fail`).
+* **`Bind` requests** are answered by `zigbee-core`; the stack handles them.
+* **Receive path**: the device is mains powered and declares
+  `rxOnWhenIdle`, so it listens instead of polling for queued frames. The
+  earlier attempt failed with `MacError(NoData)`; the current stack does not.
+* **Direction** is a manufacturer-specific cluster (`espDirection` `0xFC01`) on
+  the fan's own endpoint, not a second endpoint.
+* **Endpoint changes** no longer need a console: the pairing cluster answers a
+  `reboot` command and Home Assistant exposes it as `apply_pairing_change`, and
+  the converter re-interviews by itself when the announced count changes.
+
+Still open, with the backlog as the source of truth (`backlog.md`):
+
+1. **Packet mode is opt-in, not the default.** It works on two of three fans; one
+   (`lr-r`) ignores it while accepting every bit-banged frame. Both modes are
+   verified to put the same 24 symbols on the air, so the remaining difference is
+   timing (see `docs/PACKET-TX.md`).
+2. **No carrier calibration** against a real remote at a controlled level, and no
+   per-fan transmit profile (repeats/gap/power). Both wait for a measurement
+   setup; see backlog #17/#18.
+3. **RX bit timing comes from a polling loop** (~30 µs). Synchronous-serial mode
+   (`PKT_FORMAT = 1`) would take it from the crystal instead; backlog #7.
+4. **The config and panic sectors live inside the `factory` partition**, past the
+   application image. Application-only flashes keep them, a merged full-flash
+   image does not, and an application that ever grows past ~3.8 MB would collide
+   with them. A custom partition table would remove the caveat.
+5. **Zigbee2MQTT 2.14.2 needs the upstream patch** (#33435, merged) for fan
+   exposes on non-primary endpoints; 2.15.0 and later contain it.
 
 ## 9. Re-pairing / recovery recipe
 
@@ -186,8 +199,10 @@ forgotten, and it will never re-announce.
 
 | Component | Where | State |
 |---|---|---|
-| Firmware | `firmware/examples/esp-fanbridge` (built on `odroid` at `~/c6/zigbee-rs/examples/esp-fanbridge`) | working, flashed |
-| Z2M patch | `z2m-patch/`, live ConfigMap `z2m-ha-fan-endpoint-fix` | applied |
-| Upstream | issue #33434, PR #33435 | open, awaiting review |
-| HA | `light.0x…79d4` (older Zigbee light), `fan.…054c_2..9`, switches, selects | working |
-| Documentation | `FAN_REMOTE.md`, `DEMO.md`, this file, `hw/WIRING.md`, per-example READMEs | done |
+| Firmware | this repository, `src/` | working, flashed, releases tagged |
+| Converter | `z2m/esp-fanbridge.js`, tested by `z2m/test.js` | working, live |
+| Host tests | `protocol/` (12) and `z2m/test.js` (16) | in CI, along with `fmt`/`clippy`/build |
+| Releases | git tags, built by `.github/workflows/release.yml` | `v0.1.0` onwards |
+| Upstream | Koenkk/zigbee2mqtt#33434, #33435 | merged; 2.15.0+ needs no patch |
+| Home Assistant | `fan.…_<endpoint>`, `select.…_direction_<endpoint>`, pairing switch + sensors + `apply_pairing_change` | working |
+| Documentation | this file, `PROTOCOL.md`, `PACKET-TX.md`, `WIRING.md`, `TROUBLESHOOTING.md`, `RELEASING.md` | current |

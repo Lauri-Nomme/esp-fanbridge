@@ -11,7 +11,8 @@ the fan — and pairing/state survives reboots.
 * Stack: `esp-hal` 1.1 + [`zigbee-rs`](https://github.com/zigbee-rs/zigbee-rs)
   (pure-Rust Zigbee, pinned by `rev` in `Cargo.toml`)
 * Radio: CC1101 on SPI, 433.92 MHz ASK/OOK
-* Device: sleepy end device, ZCL `Fan Control (0x0202)` per learned remote
+* Device: mains-powered end device that keeps its receiver on (no polling, see
+  `docs/DESIGN.md`), ZCL `Fan Control (0x0202)` per learned remote
 
 Wiring, power-up checks and the traps: [`docs/WIRING.md`](docs/WIRING.md).
 Design notes and the full reverse-engineering story: [`docs/DESIGN.md`](docs/DESIGN.md)
@@ -30,7 +31,12 @@ workstation:
 
 (The wrapper runs cargo from outside the tree on purpose: the firmware's
 `.cargo/config.toml` targets the ESP32 and builds `core`/`alloc` from source,
-which breaks a host test run.) CI runs these tests plus a firmware build.
+which breaks a host test run. `LINT=1 ./protocol/run-tests.sh` also checks
+formatting and lints.)
+
+The converter has its own tests, next to it in `z2m/` - see the Zigbee2MQTT
+section below. CI runs all of it: protocol tests, converter tests, and the
+firmware build with `cargo fmt --check` and `cargo clippy -- -D warnings`.
 
 ## Build and flash
 
