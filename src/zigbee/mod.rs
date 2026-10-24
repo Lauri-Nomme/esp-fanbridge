@@ -45,6 +45,8 @@ use zigbee_types::IeeeAddress;
 use crate::config::Config;
 use crate::state::PAIRING_REPORT;
 use crate::state::REPORT_DIRTY;
+use crate::state::REPORT_FAIL;
+use crate::state::REPORT_OK;
 use crate::state::mark_all_state;
 
 // ==========================================================================
@@ -269,6 +271,9 @@ pub async fn report_task(stack: &'static ZbStack) {
         if PAIRING_REPORT.load(Ordering::Relaxed) {
             if send_pairing_report(stack).await {
                 PAIRING_REPORT.store(false, Ordering::Relaxed);
+                REPORT_OK.fetch_add(1, Ordering::Relaxed);
+            } else {
+                REPORT_FAIL.fetch_add(1, Ordering::Relaxed);
             }
         } else {
             let dirty = REPORT_DIRTY.load(Ordering::Relaxed);
@@ -276,6 +281,9 @@ pub async fn report_task(stack: &'static ZbStack) {
                 let bit = dirty.trailing_zeros();
                 if send_state_report(stack, bit).await {
                     REPORT_DIRTY.fetch_and(!(1 << bit), Ordering::Relaxed);
+                    REPORT_OK.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    REPORT_FAIL.fetch_add(1, Ordering::Relaxed);
                 }
             }
         }

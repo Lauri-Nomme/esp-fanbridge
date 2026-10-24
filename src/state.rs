@@ -139,6 +139,11 @@ pub static REARMS_NOW: AtomicU32 = AtomicU32::new(0);
 pub static TX_COUNT: AtomicU32 = AtomicU32::new(0);
 pub static RX_COUNT: AtomicU32 = AtomicU32::new(0);
 pub static REARM_COUNT: AtomicU32 = AtomicU32::new(0);
+/// Attribute reports the coordinator acknowledged, and ones that had to be
+/// retried. A rising failure count with a working RF side means the Zigbee link
+/// is the problem, not the fan.
+pub static REPORT_OK: AtomicU32 = AtomicU32::new(0);
+pub static REPORT_FAIL: AtomicU32 = AtomicU32::new(0);
 pub static UPTIME_MS: AtomicU32 = AtomicU32::new(0);
 
 /// Uptime at which to restart, or 0. A coordinator command sets it instead of
