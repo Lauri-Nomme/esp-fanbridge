@@ -436,11 +436,14 @@ Device-side names stay in the console only. Revisit only if a real need appears.
 `WIRING.md` (CSN/SCK/MOSI/MISO/GDO0/power, plus the friction-fit fix) lives in
 `c6/hw/` and is not shipped with the firmware repo.
 
-### 39. Troubleshooting decision tree — **S**
+### 39. Troubleshooting decision tree — **done**
 
-"Nothing happens" → (1) `stat`: is `marcstate=0x0d`? (2) `txmode`/`repeats` sane?
-(3) `desc`: are the endpoints there? (4) `zb:` lines on a HA command? — the order
-we actually debug in.
+`docs/TROUBLESHOOTING.md`: a symptom table, then the order we actually debug in -
+bridge alive (`status`), radio alive (`stat`), RF (`rx` lines, `dump`, RSSI),
+Zigbee reachability (`zb:` lines, `desc`, Zigbee2MQTT log), with the good value
+next to each. Also covers the two HA-specific traps: an expired transaction
+(value flips back) versus `UNSUPPORTED_CLUSTER` (converter writing the wrong
+cluster), and the stale state keys left behind by older definitions.
 
 ### 40. Reference waveform in `docs/PROTOCOL.md` — **S**
 
