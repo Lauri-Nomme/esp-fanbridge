@@ -58,7 +58,7 @@ reference. Modules are all in `main.rs`:
 | `cc1101_init` / `enter_rx` / `send_code` | SPI + radio. RX/TX share `GDO0` (`IO5`), flipped between input and output. |
 | `decode_frame` | validates 24-bit EV1527-style PWM frames (400/1200 µs, 33–45 ms total). |
 | `Config` / `Slot` | 8 slots × `{addr, speed, dir, power}`, magic + checksum. |
-| `load_config` / `save_config` | raw flash at **`0x3E0000`**, sector erase + program via `esp_storage::ll`. The Zigbee stack keeps `0x3F0000..0x3F4000`, so they don't collide. |
+| `load_config` / `save_config` | raw flash at **`0x3E0000`**, sector erase + program via `esp_storage::ll`. The Zigbee stack keeps `0x3F0000..0x3F4000`, so they don't collide. Both are inside the `factory` partition (`0x10000..0x400000`), but past the application image: an application-only flash keeps them, a merged full-flash image wipes them, and an application that ever grows past ~3.8 MB would write over them. |
 | `Chain` | one `ClusterRequestHandler` that dispatches to 35 servers held as `dyn` trait objects (a 35-deep tuple would blow up, and the library's tuple impls stop at 5). |
 | servers | `OnOffEp<EP, SLOT, KIND>` (KIND 0 = power, 1 = direction, 2 = pairing), `FanEp<SLOT>` (Fan Control). Each checks `request.dst_endpoint` before delegating to the library's default `handle_request`, which is what makes per-endpoint clustering work. |
 
