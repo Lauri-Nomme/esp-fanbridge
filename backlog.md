@@ -45,13 +45,16 @@ was being reset during a test, and repeated attempts immediately afterwards - an
 rare; if it is seen in normal use again, `status` (`rearm`, `tx`) and the Z2M
 log around the write are the things to capture.
 
+**Resolved (2026-10-25).** `rx-on-when-idle` is back on: the device is mains
+powered and now listens instead of polling, which removes the queue-and-poll
+failure class entirely. The old `MacError(NoData)` is gone with the current
+stack. Verified with 20/20 writes applied and no expiries, and again in a
+30-minute soak at one write per minute: 30/30 delivered.
+
 **Left to consider.**
 
 * Boot-to-joined is ~6 s; the expensive part is radio bring-up/calibration, not
   something the application can skip.
-* If slow rejoin becomes a problem again, poll faster (`poll_interval_ms`) or
-  revisit `rx-on-when-idle` (`0x88`) now that the stack has moved on — the older
-  `MacError(NoData)` may be gone, and this device is mains powered anyway.
 
 ## 2. Console commands update the stored state — **done**
 
@@ -107,13 +110,15 @@ the preamble handling.
 
 ---
 
-## 6. Pairing changes need a restart + re-interview — **M**
+## 6. Pairing changes need a restart + re-interview — **done**
 
-The endpoint table is built at boot, so a remote paired afterwards is counted in
-`paired_count` but has no endpoint until a restart and a re-interview
-(`exposed_count` vs `paired_count` and the `restart_required` binary sensor show
-this). Options: restart automatically after a successful pairing (most
-forgiving), or re-announce and let the user press "re-interview".
+The endpoint table is built at boot, so a pairing change needs a restart and a
+fresh interview. Both halves are now automatic: the device restarts three
+seconds after learning a remote, the converter re-interviews when it notices the
+announced count changed, and a *deletion* can be applied on demand through
+`apply_pairing_change` (a `reboot` command on the pairing cluster, exposed as a
+select in Home Assistant). `paired_count` vs `exposed_count` and the
+`restart_required` binary sensor still show when something is pending.
 
 ---
 
