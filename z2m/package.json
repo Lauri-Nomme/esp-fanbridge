@@ -1,0 +1,11 @@
+{
+  "name": "esp-fanbridge-converter",
+  "private": true,
+  "description": "Zigbee2MQTT external converter for the esp-fanbridge firmware",
+  "scripts": {
+    "test": "node test.js"
+  },
+  "devDependencies": {
+    "zigbee-herdsman-converters": "26.115.1"
+  }
+}
