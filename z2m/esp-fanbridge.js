@@ -145,8 +145,17 @@ module.exports = {
                 if (msg.data.fanMode === undefined) return;
                 const mode = utils.getKey(constants.fanMode, msg.data.fanMode);
                 const speed = SPEEDS.indexOf(mode) + 1; // 0 when not a speed
+                const state = utils.postfixWithEndpointName('state', msg, model, meta);
+                if (speed === 0) {
+                    // `off` says the fan is stopped, not that its speed is zero:
+                    // the device keeps the slot's speed so that turning it back on
+                    // restores it, and the reported state should not forget either
+                    // (backlog #41). Leave `speed` out of the payload so the cache
+                    // keeps the last value.
+                    return {[state]: 'OFF'};
+                }
                 return {
-                    [utils.postfixWithEndpointName('state', msg, model, meta)]: speed === 0 ? 'OFF' : 'ON',
+                    [state]: 'ON',
                     [utils.postfixWithEndpointName('speed', msg, model, meta)]: speed,
                 };
             },
@@ -208,7 +217,8 @@ module.exports = {
                 const speedProperty = utils.postfixWithEndpointName('speed', {endpoint: entity}, meta.mapped, meta);
                 if (key === 'state' && value === 'OFF') {
                     await entity.write('hvacFanCtrl', {fanMode: constants.fanMode.off});
-                    return {state: {state: 'OFF', speed: 0}};
+                    // same as the reported path: keep the speed, only stop
+                    return {state: {state: 'OFF'}};
                 }
                 // turning on keeps the speed the fan had, low if there was none
                 const speed = key === 'speed' ? Math.min(Math.max(Number(value), 1), SPEEDS.length) : meta.state?.[speedProperty] || 1;

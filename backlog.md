@@ -204,7 +204,7 @@ session.
 
 ## State visibility
 
-### 41. Retain speed and direction while the fan is off — **S/M**
+### 41. Retain speed and direction while the fan is off — **done**
 
 Today a powered-down fan loses its speed in Home Assistant: `FanMode` reports
 `Off`, the converter maps that to speed 0, and the slider snaps to 0%. The device
@@ -212,11 +212,18 @@ itself still remembers the slot's speed and direction in its config, so turning
 the fan back on restores them on the wire - it is the *reported* state that
 forgets.
 
-Options, to discuss:
+**Decided: the first option.** The converter no longer publishes `speed: 0` when
+the fan is off - the payload carries `state: OFF` alone, so the cached speed
+survives and Home Assistant shows "off, last 50 %". Turning the fan on again
+already re-sent the remembered speed (the `meta.state` lookup in `convertSet`),
+so this makes the reported side match what the wire side was doing. Verified on
+hardware: `state_3 OFF` with `speed_3 2` retained, and back to `ON, 2`.
+
+Options that were considered:
 
 * report the last non-zero speed alongside `state: OFF` (HA then shows "off but
   33%", which is how most MQTT fans behave), at the cost of a second value to
-  keep in sync
+  keep in sync - **chosen**
 * keep the `Off`/0 mapping and accept that the UI forgets: simpler, matches the
   ZCL model where `Off` *is* the mode
 * if the physical fans also forget their direction when unpowered, re-assert
