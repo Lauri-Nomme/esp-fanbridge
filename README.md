@@ -75,6 +75,7 @@ sudo minicom -D /dev/ttyACM0 -b 115200      # Ctrl-A W to wrap, Ctrl-A X to exit
 | `name [text]` | show or set the device name (stored in flash) |
 | `name <slot> [text]` | show or set a fan's name |
 | `reboot` | restart the bridge (applies a changed endpoint set) |
+| `panic` | crash on purpose — checks that the next boot reports the crash |
 | `save` | force a config save |
 | `stat` | chip state: MARCSTATE, RSSI, IOCFG0/PKTCTRL0/MDMCFG2, captured segments, raw edge count, GDO0 level |
 | `dump` | the last captured edge timings |

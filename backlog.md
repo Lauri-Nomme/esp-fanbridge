@@ -381,7 +381,22 @@ one and flashing it. First tag: `v0.1.0`.
 Attach the `.bin`/`.elf` to a tag so flashing does not require the toolchain
 (`esptool`/`espflash` can write a bin directly).
 
-### 30. Persist the last panic — **M**
+### 30. Persist the last panic — **done**
+
+The firmware installs its own `#[panic_handler]` (esp-backtrace's handler is no
+longer compiled in, `Backtrace` still is): it formats the panic into a bounded
+buffer, writes one record to its own sector at `0x3D0000`, prints the same
+information and halts. The next boot prints
+
+```
+last panic after 1s: panicked at src/console.rs:685:13: console: test panic (expected)
+```
+
+and the main loop erases the record once the scheduler is running. That last
+detail is not cosmetic: erasing during early boot *aborts the chip*, which is how
+this was found - the first version erased inside the boot-time read and every
+subsequent boot died with "Aborted". The console `panic` command exists to test
+the whole path.
 
 `esp-backtrace` prints to the console, which nobody sees when the device is in a
 cabinet. Writing a panic record (message/PC) to a spare flash sector and printing

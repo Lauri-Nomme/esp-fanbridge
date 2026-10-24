@@ -328,6 +328,7 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
             c.outln("  cfg load             paste a dump back, then a line with end");
             c.outln("  identify <secs>      blink the LED like the coordinator's identify");
             c.outln("  reboot               restart (needed after pair/del: the endpoint set is fixed at boot)");
+            c.outln("  panic                crash on purpose (checks that the next boot reports it)");
         }
         "list" => print_list(c),
         "pair" => {
@@ -677,6 +678,11 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
         "reboot" => {
             c.outln("rebooting...");
             esp_hal::system::software_reset();
+        }
+        "panic" => {
+            // the only way to test the panic path without waiting for a real bug
+            c.outln("panicking on purpose...");
+            panic!("console: test panic (expected)");
         }
         "name" => {
             // `name` -> device name, `name <slot> [text]` -> fan name
