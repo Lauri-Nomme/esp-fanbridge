@@ -448,8 +448,10 @@ next to each. Also covers the two HA-specific traps: an expired transaction
 (value flips back) versus `UNSUPPORTED_CLUSTER` (converter writing the wrong
 cluster), and the stale state keys left behind by older definitions.
 
-### 40. Reference waveform in `docs/PROTOCOL.md` — **S**
+### 40. Reference waveform in `docs/PROTOCOL.md` — **done**
 
-Add the measured remote frame (`n=49`, ~415/1199 µs, 38.87 ms, captured at 8 µs
-resolution) next to the nominal description, so a future "is our TX right?"
-question can be answered by comparison.
+A "Reference waveform" section next to the nominal table: measured short/long
+pulse ranges over 24 pulses (375–425 µs / 1183–1219 µs, means 400.1/1197.5),
+frame total 38.75 ms, and the decoder's acceptance windows (250–650, 850–1800,
+33–45 ms) so a mismatch can be read off directly. Plus how to compare a live
+device: `dump` for the raw edges, `rx …` for the decoded code and RSSI.
