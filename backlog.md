@@ -228,6 +228,30 @@ seconds later - the parent was queueing for a sleepy child, because the device
 had only ever *resumed* since it gained `rxOnWhenIdle`. After `rejoin`, writes
 were answered one-for-one in under a second.
 
+### 49. The device goes deaf while an acknowledged send waits — **next, with evidence**
+
+After a fresh commission everything works: commands apply (`tx` climbs), reports
+are acknowledged, `writeRsp` arrives. Hours (or a reboot) later the same device
+delivers the coordinator's frames to its MAC (the coordinator's `dataConfirm`
+says `status: 0`, and the device's own `tx` stays at 0) and answers nothing.
+
+The most consistent explanation left: the *acknowledged* send used by reports
+holds the radio lock while it waits for an APS acknowledgement (up to
+`apscMaxFrameRetries` × the ack timeout). While that lock is held the receive
+loop cannot drain, so frames queue and are dropped - and the queue is short. The
+reply path is fire-and-forget (`unicast_data`), which is why replies are *also*
+lost but without blocking anything.
+
+Evidence for it: the sniffer shows the coordinator's frames arriving at the
+device with increasing security frame counters, the device's MAC acknowledging
+them (`dataConfirm status: 0`), and no frames coming back at all - a device that
+is alive on the radio but not processing.
+
+Next: instrument the send path (log when the radio lock is taken and released,
+and for how long), reproduce the degraded state, and then fix it - either bound
+the wait, or do not hold the lock across the ack wait, or send reports without
+expecting an acknowledgement.
+
 ### 48. A refused join rebooted the device — **fixed, and it was today's "bounce"**
 
 The stack task reset the device whenever the stack stopped. After the channel move
