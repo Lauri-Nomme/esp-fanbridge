@@ -227,6 +227,25 @@ seconds later - the parent was queueing for a sleepy child, because the device
 had only ever *resumed* since it gained `rxOnWhenIdle`. After `rejoin`, writes
 were answered one-for-one in under a second.
 
+### 46. Reports lose their acknowledgements — instrument first — **M, next**
+
+The clearest lead from the 2026-10-25 session, and it is on the *device* side:
+`status` ends with `rep <ok>/<fail>`, and after a fresh commission it read
+**1/16** — fifteen reports in a row unacknowledged — while the same device, after
+a plain reboot (resume with the stored keys), read **20/1**. The coordinator's
+writes expiring (`MAC_TRANSACTION_EXPIRED`) is the same problem from the other
+direction: nothing the device sends is landing, so the coordinator keeps the
+frame in its indirect queue until it expires.
+
+Not yet known: which confirm status each failed report gets (no-ack at MAC?
+security failure at APS? route failure?), and whether the joining device ends up
+with a security state the coordinator does not share. A fresh join logs
+`announce failed: SecurityError(Unspecified)` before it settles, which is a hint.
+
+Next step: log the send confirm status per report (and per announce) into the
+console, reproduce a fresh join, and compare against a resumed boot. Until that
+is understood, `rejoin`/`leave` are recovery tools, not fixes.
+
 ### 45. Router role instead of end device — **M, needs a deliberate test**
 
 **Later evidence (2026-10-25, 03:15).** `rejoin` is not a reliable cure: one run
