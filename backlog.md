@@ -228,24 +228,26 @@ seconds later - the parent was queueing for a sleepy child, because the device
 had only ever *resumed* since it gained `rxOnWhenIdle`. After `rejoin`, writes
 were answered one-for-one in under a second.
 
-### 46. Reports lose their acknowledgements — instrument first — **M, next**
+### 46. Reports lose their acknowledgements — **mostly explained; latency left**
 
-The clearest lead from the 2026-10-25 session, and it is on the *device* side:
-`status` ends with `rep <ok>/<fail>`, and after a fresh commission it read
-**1/16** — fifteen reports in a row unacknowledged — while the same device, after
-a plain reboot (resume with the stored keys), read **20/1**. The coordinator's
-writes expiring (`MAC_TRANSACTION_EXPIRED`) is the same problem from the other
-direction: nothing the device sends is landing, so the coordinator keeps the
-frame in its indirect queue until it expires.
+What the instrumentation showed, in order:
 
-Not yet known: which confirm status each failed report gets (no-ack at MAC?
-security failure at APS? route failure?), and whether the joining device ends up
-with a security state the coordinator does not share. A fresh join logs
-`announce failed: SecurityError(Unspecified)` before it settles, which is a hint.
+1. The `1/16` reading that started this was **my own bug**: the report task gated
+   itself on `wait_until_joined()`, whose waker is single-consumer, so after one
+   boot it never ran again. Fixed in #39 - `rep` climbs normally now.
+2. The `SecurityFail` failures were the **pre-join** attempts (every report fails
+   instantly before the network key is installed), retried at 50 ms - sixteen in
+   under a second. Fixed by backing off and by not reporting before there is a
+   network (#39).
+3. What is left is **latency**, and it is intermittent in both directions: a
+   command and its reply normally complete in under a second, and occasionally
+   everything is 3-40 s late, in clumps. That is the shape of interference, and
+   this network runs on **channel 11**, directly on top of WiFi channel 1.
 
-Next step: log the send confirm status per report (and per announce) into the
-console, reproduce a fresh join, and compare against a resumed boot. Until that
-is understood, `rejoin`/`leave` are recovery tools, not fixes.
+Next step if it recurs: measure the same way (write/response pairs in the
+Zigbee2MQTT log over 20 minutes) with the device's WiFi neighbours known, and
+compare a channel-11 network against a channel away from the local access points.
+Changing the channel re-forms the network, so it needs the household's blessing.
 
 ### 45. Router role instead of end device — **M, needs a deliberate test**
 
