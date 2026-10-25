@@ -489,6 +489,9 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
         // rx-on-when-idle) is only visible to the parent on a fresh association
         if REJOIN_REQ.swap(false, Ordering::Relaxed) {
             console.outln("rejoining: fresh association, same keys...");
+            // a rejoin before the device is on the network cannot succeed, and
+            // the MacError it returns says nothing useful
+            stack.wait_until_joined().await;
             let epid = zigbee_types::IeeeAddress(*zb_stack::nwk::nib::get_ref().extended_panid());
             let outcome = stack.device().rejoin(epid, 11..27, 3).await;
             let mut b = [0u8; 80];
