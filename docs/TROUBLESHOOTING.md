@@ -143,22 +143,23 @@ zb: slot 1 "lr-l" speed -> 2
   value, its 10-second ZCL timeout expires, and the device's next report restores
   reality - that is the "it bounces back" symptom.
 
-  This device is an end device, so a coordinator delivers to it through an
-  *indirect* path with a persistence timeout. `rxOnWhenIdle` removed the polling
-  that used to make that path cheap, but the queue is still there: commands
-  usually land in under a second, and a burst can still time out.
+  This device is an end device, so the coordinator delivers to it through an
+  *indirect* queue with a persistence timeout - and it hands frames over when the
+  device polls. The device polls every 100 ms, which is why commands normally
+  answer in well under a second.
 
-  Two things to do:
+  If they stop doing that:
 
-  1. `rejoin` on the console. It re-associates (keys kept) and gives the parent a
-     fresh child entry - the fix when the parent still holds an entry from
-     before the device gained `rxOnWhenIdle`, or after the device has been off
-     the network for a while. Verified: writes that were batching and timing out
-     became one-for-one in under a second.
-  2. If it recurs often, the structural fix is to let this device join as a
-     **router** (it is mains powered): routers are addressed directly, so there is
-     no indirect queue to expire. That changes the mesh role and is worth doing
-     deliberately, not at three in the morning.
+  1. `status`: `rep <ok>/<fail>` shows whether the device's own reports are being
+     acknowledged. A run of failures means the *link*, not the queue.
+  2. `rejoin` if the parent's child entry looks stale (it re-associates, keys
+     kept), `leave` if it is worse than that (rebuilds network membership; needs
+     permit-join open).
+  3. Check the Zigbee channel against the WiFi in the area. This network runs on
+     channel 11, which sits on top of WiFi channel 1; the symptom of that is
+     exactly this - intermittent, in both directions, in bursts.
+  4. The structural alternative is a **router** role (mains powered), which is
+     addressed directly and has no indirect queue at all; see the backlog.
 * **`UNSUPPORTED_CLUSTER` or `UNSUPPORTED_ATTRIBUTE`**: the converter is writing
   the wrong cluster or attribute for that endpoint - typically an old converter
   file. Compare with `z2m/esp-fanbridge.js` in this repository.

@@ -45,11 +45,12 @@ was being reset during a test, and repeated attempts immediately afterwards - an
 rare; if it is seen in normal use again, `status` (`rearm`, `tx`) and the Z2M
 log around the write are the things to capture.
 
-**Resolved (2026-10-25).** `rx-on-when-idle` is back on: the device is mains
-powered and now listens instead of polling, which removes the queue-and-poll
-failure class entirely. The old `MacError(NoData)` is gone with the current
-stack. Verified with 20/20 writes applied and no expiries, and again in a
-30-minute soak at one write per minute: 30/30 delivered.
+**Resolved (2026-10-25), by going the other way.** The device briefly declared
+`rxOnWhenIdle` and stopped polling; the parent kept queueing frames for a polling
+child, and commands expired (`MAC_TRANSACTION_EXPIRED`) — the "it bounces back"
+symptom. It polls again (100 ms, the path measured at 25/25 and 30/30), which is
+what the parent negotiates (`nwkParentInformation = 0x01`). See #25 for the
+reversal and #46 for what is still unexplained about the link itself.
 
 **Left to consider.**
 
@@ -412,11 +413,19 @@ returned `fanModeSequence=0` (the read is not part of the shipped converter).
 The Identify cluster is served, but the LED ignores it, so Z2M's "identify"
 button does nothing visible. Blink for `identify_time` seconds.
 
-### 25. Revisit `rx-on-when-idle` — **M**
+### 25. Revisit `rx-on-when-idle` — **tried, reverted; do not retry without a reason**
 
 The device is mains powered but declares itself sleepy (`0x80`). `0x88` failed
 earlier with `MacError(NoData)`; the stack has changed a lot since. Staying awake
 would remove polling latency entirely (see backlog §1).
+
+**Outcome (2026-10-25).** Implemented, then reverted within a day. The stack
+takes the `receive_and_dispatch` path when the capability bit is set, so it
+stops polling; the coordinator, however, answers the end-device timeout request
+with `nwkParentInformation = 0x01` - "keepalive by MAC data poll" - and keeps
+queueing frames for a polling child. Commands then sat in its indirect queue
+until they expired. Delivery latency went from sub-second to 3-40 s with
+`MAC_TRANSACTION_EXPIRED` bursts. Polling at 100 ms is what this parent wants.
 
 ### 26. Expose the watchdog counters — **S**
 
