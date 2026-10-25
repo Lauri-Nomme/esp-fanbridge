@@ -178,6 +178,36 @@ zb: slot 1 "lr-l" speed -> 2
   prints what the device transmits (`tx 0x… via bit-bang took … ms`) and every
   time the watchdog has to re-arm the receiver.
 
+## 9. The device stops accepting commands, but reports still arrive
+
+Symptom: Home Assistant publishes, the state flips back, and the device keeps
+sending reports - so the radio is clearly alive. On the console the tell is `tx 0`
+after commands that should have transmitted, and `rep` failing.
+
+Two causes were found and fixed in the stack (see backlog #50 and the
+`fanbridge-fixes` branch of `Lauri-Nomme/zigbee-rs`):
+
+* **The boot log says `resuming on network: addr=… ch N` with the wrong `N`.** The
+  stack resumed on `channels.start` instead of the channel the network is on, so
+  the rejoin went out on the wrong channel. A network on channel 25 must show
+  `ch 25`.
+* **`rejoin failed (…), forgetting network`.** A single refused rejoin used to
+  wipe the network membership, leaving the device offline until somebody opened a
+  join window. It now says `keeping the network (retrying)` and keeps trying.
+
+If it happens on a build without the fix:
+
+```sh
+leave                      # forget the membership and re-commission (permit-join open)
+```
+
+and, if `leave` does not stick, erase the stack's store and flash again:
+
+```sh
+espflash erase-region --port /dev/ttyACM0 0x3F0000 0x4000
+espflash flash --port /dev/ttyACM0 esp-fanbridge-<version>.elf
+```
+
 ## 8. The LED
 
 | Pattern | Meaning |
