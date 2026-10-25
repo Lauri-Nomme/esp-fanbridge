@@ -485,6 +485,15 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
             }
         }
 
+        // ---- forget the network on request: the only way to get a fresh
+        // child-table entry when a rejoin is refused (DESIGN §9, in one command)
+        if LEAVE_REQ.swap(false, Ordering::Relaxed) {
+            console.outln("forgetting the network...");
+            stack.forget_network().await;
+            console.outln("forgotten; rebooting to commission from scratch");
+            esp_hal::system::software_reset();
+        }
+
         // ---- re-associate on request: a capability change (e.g. gaining
         // rx-on-when-idle) is only visible to the parent on a fresh association
         if REJOIN_REQ.swap(false, Ordering::Relaxed) {
