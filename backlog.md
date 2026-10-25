@@ -218,6 +218,23 @@ stopped fan reporting speed 0 - plus the speed 4 ↔ `on` mapping, direction
 values, the pairing payload, clamping, and the exposes of a device with and
 without endpoints. CI runs it in its own job.
 
+### 44. Rejoin from the console — **done**
+
+`rejoin` re-associates (same keys, fresh child entry). Motivated by a real
+symptom: writes from Home Assistant timing out with `MAC_TRANSACTION_EXPIRED`
+while reports flowed fine, and a burst of commands arriving in a clump tens of
+seconds later - the parent was queueing for a sleepy child, because the device
+had only ever *resumed* since it gained `rxOnWhenIdle`. After `rejoin`, writes
+were answered one-for-one in under a second.
+
+### 45. Router role instead of end device — **M, needs a deliberate test**
+
+`DeviceConfig.logical_type` supports a router, and this device is mains powered.
+A router is addressed directly, which removes the coordinator's indirect queue
+and with it the class of failure where a command expires before it is delivered.
+It changes the mesh role (the device would relay for others and could become a
+parent), so it should be done with the whole network in view and a way back.
+
 ### 42. Report counters and an on-demand flush — **done**
 
 `status` carries `rep <ok>/<fail>` and `report` queues the full state flush that

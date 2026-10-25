@@ -741,6 +741,11 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
             c.outln("rebooting...");
             esp_hal::system::software_reset();
         }
+        "rejoin" => {
+            // not resetting here: the main loop drains this and awaits the join
+            REJOIN_REQ.store(true, Ordering::Relaxed);
+            c.outln("rejoin requested (fresh association, network key kept)");
+        }
         "panic" => {
             // the only way to test the panic path without waiting for a real bug
             c.outln("panicking on purpose...");
