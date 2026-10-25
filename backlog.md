@@ -228,42 +228,54 @@ seconds later - the parent was queueing for a sleepy child, because the device
 had only ever *resumed* since it gained `rxOnWhenIdle`. After `rejoin`, writes
 were answered one-for-one in under a second.
 
-### 46. Reports lose their acknowledgements — **mostly explained; latency left**
+### 46. `rxOnWhenIdle` cannot be used: the transport-key poll loses the key — **blocker**
 
-What the instrumentation showed, in order:
+The parent negotiates "keepalive by MAC data poll" (`nwkParentInformation = 0x01`),
+i.e. it queues frames for a polling child. Declaring `rxOnWhenIdle` makes the
+stack stop polling, so those queued commands expire (`MAC_TRANSACTION_EXPIRED`) —
+the "it bounces back" symptom. Measured tonight: replies 3-40 s late and in
+clumps with rx-on, sub-second when polling.
 
-1. The `1/16` reading that started this was **my own bug**: the report task gated
-   itself on `wait_until_joined()`, whose waker is single-consumer, so after one
-   boot it never ran again. Fixed in #39 - `rep` climbs normally now.
-2. The `SecurityFail` failures were the **pre-join** attempts (every report fails
-   instantly before the network key is installed), retried at 50 ms - sixteen in
-   under a second. Fixed by backing off and by not reporting before there is a
-   network (#39).
-3. What is left is **latency**, and it is intermittent in both directions: a
-   command and its reply normally complete in under a second, and occasionally
-   everything is 3-40 s late, in clumps. That is the shape of interference, and
-   this network runs on **channel 11**, directly on top of WiFi channel 1.
+But declaring **rx-off is not bootable on this stack**:
 
-Next step if it recurs: measure the same way (write/response pairs in the
-Zigbee2MQTT log over 20 minutes) with the device's WiFi neighbours known, and
-compare a channel-11 network against a channel away from the local access points.
-Changing the channel re-forms the network, so it needs the household's blessing.
+```
+[MLME-ASSOCIATE] success, short_addr=ShortAddress(0x14da)
+[BDB] step 9: poll for network key (transport-key)
+   ... nothing. No key installed, no error surfaced.
+```
 
-### 45. Router role instead of end device — **M, needs a deliberate test**
+The association succeeds, the coordinator sees the device, and every frame the
+device sends then fails with `SecurityFail` — the network key never arrives,
+because `poll_transport_key()` fetches it with `poll_nwk_data()` rather than the
+receive loop. With rx-on the key arrives through the receive loop instead.
 
-**Later evidence (2026-10-25, 03:15).** `rejoin` is not a reliable cure: one run
-succeeded and delivery was sub-second for a while, the next was refused outright
-(`secure rejoin failed (NotPermitted)`, then `MacError` on the trust-center
-fallback), and a write timed out again a minute later. That is consistent with
-the parent not holding a usable child entry for this device at all, in which
-case only a fresh commission (permit-join open) changes its mind. The indirect
-queue is the root of the class, so the router role stays the real fix.
+So the two requirements are incompatible today: rx-on joins but is delivered to
+badly, rx-off is delivered to well but cannot join. Backlog #45 is the way out.
+Until then the firmware keeps rx-on, because a device that joins and is
+occasionally slow beats one that cannot join at all.
 
-`DeviceConfig.logical_type` supports a router, and this device is mains powered.
-A router is addressed directly, which removes the coordinator's indirect queue
-and with it the class of failure where a command expires before it is delivered.
-It changes the mesh role (the device would relay for others and could become a
-parent), so it should be done with the whole network in view and a way back.
+Side observations worth keeping:
+
+* A join that starts with a device the coordinator *knows* never gets a network
+  key ("secure rejoin failed (MacError)", then no transport key), so
+  re-commissioning needs the device removed in Zigbee2MQTT first — DESIGN §9's
+  first step is not optional.
+* After such a re-commission the interview failed once ("can not get active
+  endpoints") and succeeded on a retry — the timing sensitivity in DESIGN §8.
+* `keepalive poll dropped a data frame` (stack, debug level): a frame retrieved
+  by the keepalive poll is discarded. Rare with polling as the main path, but it
+  is a lost command when it happens.
+
+### 45. Router role instead of end device — **M, now the most promising fix**
+
+A router is addressed directly: no indirect queue, no poll, and `rxOnWhenIdle` is
+part of what a router *is*, so neither of the two problems in #46 applies. This
+device is mains powered, so it is entitled to be one.
+
+Costs: it would relay for others (a role change in the household mesh), and the
+stack has to support router duties properly — worth watching whether other
+devices route through it without trouble. `logical_type: LogicalType::Router`
+plus the router capability bit is the switch.
 
 ### 42. Report counters and an on-demand flush — **done**
 
