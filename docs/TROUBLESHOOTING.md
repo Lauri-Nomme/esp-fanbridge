@@ -155,9 +155,10 @@ zb: slot 1 "lr-l" speed -> 2
   2. `rejoin` if the parent's child entry looks stale (it re-associates, keys
      kept), `leave` if it is worse than that (rebuilds network membership; needs
      permit-join open).
-  3. Check the Zigbee channel against the WiFi in the area. This network runs on
-     channel 11, which sits on top of WiFi channel 1; the symptom of that is
-     exactly this - intermittent, in both directions, in bursts.
+  3. Check the Zigbee channel against the WiFi in the area. It was moved from 11
+     to 25 for this reason (WiFi 6 has three APs here, the strongest one at
+     -38 dBm). The firmware scans 11..26, so a coordinator channel change only
+     needs a `leave`, not a reflash.
   4. The structural alternative is a **router** role (mains powered), which is
      addressed directly and has no indirect queue at all; see the backlog.
 * **`UNSUPPORTED_CLUSTER` or `UNSUPPORTED_ATTRIBUTE`**: the converter is writing
