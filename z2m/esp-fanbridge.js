@@ -66,25 +66,44 @@ const DIRECTIONS = ['in', 'out', 'auto'];
 const lastExposed = new Map();
 
 /**
- * Write (or command) with one retry.
+ * Write an attribute and confirm it landed.
  *
- * This device's reply can take longer than Zigbee2MQTT's default ten-second ZCL
- * timeout - the coordinator queues a frame for it and hands it over on the next
- * poll, and that path occasionally stretches to tens of seconds. A write whose
- * reply is late is treated as failed and Home Assistant reverts the value, which
- * is the "it bounces back" symptom. Everything written here is an absolute
- * value, so sending it again is safe; the first attempt usually lands, and the
- * retry covers the case where it did not.
+ * This device applies commands reliably, but its *reply* is often lost: the
+ * coordinator's `dataConfirm` says the write was delivered, the device's state
+ * changed, and the ZCL response never arrives. Zigbee2MQTT then reports a
+ * failure, Home Assistant reverts the optimistic value, and the user sees a
+ * command that "bounces back" although the fan obeyed it.
+ *
+ * So a failed write is not treated as a failure: the attribute is read back and,
+ * if the device holds the value that was written, the write is confirmed. Both
+ * values used here are absolute (a direction index, a fan mode), so the answer
+ * is unambiguous.
  */
-async function writeRetry(entity, cluster, payload, meta) {
-    const options = {timeout: 20000};
+async function writeConfirmed(entity, cluster, attribute, payload, expected) {
+    const options = {timeout: 10000};
     try {
-        return await entity.write(cluster, payload, options);
+        await entity.write(cluster, payload, options);
+        return;
     } catch (e) {
-        logger.info(`esp-fanbridge: ${cluster} write failed (${e.message}), retrying once`);
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        return entity.write(cluster, payload, options);
+        logger.info(`esp-fanbridge: ${cluster} write failed (${e.message}), reading back`);
     }
+    try {
+        await entity.read(cluster, [attribute], options);
+    } catch (e) {
+        // The read-back needs a reply too, and replies are what goes missing.
+        // The write demonstrably reaches this device, so assume it landed: the
+        // device's own report will correct the display if it did not. Throwing
+        // here would make Zigbee2MQTT revert the optimistic state and *undo* a
+        // command that was in fact applied - the visible bounce.
+        logger.info(`esp-fanbridge: ${cluster} reply lost and read-back failed (${e.message}), assuming applied`);
+        return;
+    }
+    const value = entity.getClusterAttributeValue(cluster, attribute);
+    if (value !== expected) {
+        // a successful read that disagrees is proof the write did not land
+        throw new Error(`${cluster}.${attribute} is ${value}, expected ${expected}`);
+    }
+    logger.info(`esp-fanbridge: ${cluster}.${attribute} = ${value} without a reply, confirmed`);
 }
 
 // `exposes` is also called with a placeholder device (without endpoints) while
@@ -232,7 +251,7 @@ module.exports = {
             key: ['direction'],
             convertSet: async (entity, key, value) => {
                 if (!DIRECTIONS.includes(value)) return;
-                await writeRetry(entity, 'espDirection', {direction: DIRECTIONS.indexOf(value)});
+                await writeConfirmed(entity, 'espDirection', 'direction', {direction: DIRECTIONS.indexOf(value)}, DIRECTIONS.indexOf(value));
                 return {state: {direction: value}};
             },
             convertGet: async (entity) => {
@@ -255,13 +274,13 @@ module.exports = {
                 }
                 const speedProperty = utils.postfixWithEndpointName('speed', {endpoint: entity}, meta.mapped, meta);
                 if (key === 'state' && value === 'OFF') {
-                    await writeRetry(entity, 'hvacFanCtrl', {fanMode: constants.fanMode.off});
+                    await writeConfirmed(entity, 'hvacFanCtrl', 'fanMode', {fanMode: constants.fanMode.off}, constants.fanMode.off);
                     // same as the reported path: keep the speed, only stop
                     return {state: {state: 'OFF'}};
                 }
                 // turning on keeps the speed the fan had, low if there was none
                 const speed = key === 'speed' ? Math.min(Math.max(Number(value), 1), SPEEDS.length) : meta.state?.[speedProperty] || 1;
-                await writeRetry(entity, 'hvacFanCtrl', {fanMode: constants.fanMode[SPEEDS[speed - 1]]});
+                await writeConfirmed(entity, 'hvacFanCtrl', 'fanMode', {fanMode: constants.fanMode[SPEEDS[speed - 1]]}, constants.fanMode[SPEEDS[speed - 1]]);
                 return {state: {state: 'ON', speed}};
             },
             convertGet: async (entity, key) => {
