@@ -746,6 +746,10 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
             REJOIN_REQ.store(true, Ordering::Relaxed);
             c.outln("rejoin requested (fresh association, network key kept)");
         }
+        "leave" => {
+            LEAVE_REQ.store(true, Ordering::Relaxed);
+            c.outln("forgetting the network - open permit-join before it reboots");
+        }
         "panic" => {
             // the only way to test the panic path without waiting for a real bug
             c.outln("panicking on purpose...");

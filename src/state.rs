@@ -155,6 +155,13 @@ pub static UPTIME_MS: AtomicU32 = AtomicU32::new(0);
 /// late, in batches, or expire.
 pub static REJOIN_REQ: AtomicBool = AtomicBool::new(false);
 
+/// Set by the console: forget the network and commission from scratch.
+///
+/// The next boot scans and joins as a new association, which is the only thing
+/// that makes a parent build a fresh child-table entry for us - and the recipe
+/// in `docs/DESIGN.md` §9, in one command.
+pub static LEAVE_REQ: AtomicBool = AtomicBool::new(false);
+
 /// Uptime at which to restart, or 0. A coordinator command sets it instead of
 /// resetting on the spot, so the write response still reaches the caller.
 pub static REBOOT_AT_MS: AtomicU32 = AtomicU32::new(0);
