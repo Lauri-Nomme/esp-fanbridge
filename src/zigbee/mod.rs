@@ -226,11 +226,6 @@ pub fn stack_config(endpoints: &'static [EndpointDescriptor<'static>]) -> StackC
         },
         DeviceConfig {
             logical_type: LogicalType::EndDevice,
-            // bit7 allocate address, bit3 receiver-on-when-idle, bit2 mains
-            // power: this device runs off USB and listens instead of polling.
-            // The power bit matters as much as the receiver bit - a parent that
-            // is told "battery" queues frames for a device it expects to poll,
-            // and they expire (MAC_TRANSACTION_EXPIRED) when it does not.
             capability_information: CapabilityInformation(0x8c),
             discovery_type: DiscoveryType::default(),
             tc_link_key_exchange: true,
@@ -268,27 +263,66 @@ pub fn stack_config(endpoints: &'static [EndpointDescriptor<'static>]) -> StackC
 /// unreachable. Here a failed send just leaves the bit set for the next pass.
 #[embassy_executor::task]
 pub async fn report_task(stack: &'static ZbStack) {
+    // A report that cannot be sent is retried, but not in a tight loop: before
+    // the join completes every attempt fails instantly (SecurityFail), and with
+    // a 50 ms cadence that is twenty failures a second flooding the console and
+    // the radio exactly when the join needs them quiet.
+    let mut backoff_ms: u64 = 50;
     loop {
+        // Nothing can be reported before there is a network to report on. This
+        // is a level check on the information base rather than
+        // `wait_until_joined()`: that event has a single waker, and the receive
+        // loop and the announce task wait on it too - a third waiter can miss
+        // the wake-up and stall forever, which is exactly what happened when
+        // this gate first used it (no reports at all after a boot).
+        let addr = *zigbee::nwk::nib::get_ref().network_address();
+        if addr == zigbee::nwk::nib::NWK_UNASSIGNED_ADDRESS {
+            Timer::after_millis(250).await;
+            continue;
+        }
+
+        let mut attempted = false;
+        let mut sent = false;
         if PAIRING_REPORT.load(Ordering::Relaxed) {
-            if send_pairing_report(stack).await {
-                PAIRING_REPORT.store(false, Ordering::Relaxed);
-                REPORT_OK.fetch_add(1, Ordering::Relaxed);
-            } else {
-                REPORT_FAIL.fetch_add(1, Ordering::Relaxed);
+            attempted = true;
+            match send_pairing_report(stack).await {
+                Ok(()) => {
+                    PAIRING_REPORT.store(false, Ordering::Relaxed);
+                    REPORT_OK.fetch_add(1, Ordering::Relaxed);
+                    sent = true;
+                }
+                Err(e) => {
+                    REPORT_FAIL.fetch_add(1, Ordering::Relaxed);
+                    println!("rep fail: {} (pairing)", e.name());
+                }
             }
         } else {
             let dirty = REPORT_DIRTY.load(Ordering::Relaxed);
             if dirty != 0 {
+                attempted = true;
                 let bit = dirty.trailing_zeros();
-                if send_state_report(stack, bit).await {
-                    REPORT_DIRTY.fetch_and(!(1 << bit), Ordering::Relaxed);
-                    REPORT_OK.fetch_add(1, Ordering::Relaxed);
-                } else {
-                    REPORT_FAIL.fetch_add(1, Ordering::Relaxed);
+                match send_state_report(stack, bit).await {
+                    Ok(()) => {
+                        REPORT_DIRTY.fetch_and(!(1 << bit), Ordering::Relaxed);
+                        REPORT_OK.fetch_add(1, Ordering::Relaxed);
+                        sent = true;
+                    }
+                    Err(e) => {
+                        REPORT_FAIL.fetch_add(1, Ordering::Relaxed);
+                        println!("rep fail: {} (bit {bit})", e.name());
+                    }
                 }
             }
         }
-        Timer::after_millis(50).await;
+
+        let wait = if attempted && !sent {
+            backoff_ms = (backoff_ms * 2).min(3_000);
+            backoff_ms
+        } else {
+            backoff_ms = 50;
+            backoff_ms
+        };
+        Timer::after_millis(wait).await;
     }
 }
 

@@ -30,14 +30,24 @@ async function test(name, fn) {
 }
 
 /** A fake coordinator endpoint that records what the converter does to it. */
-function endpoint(ID, clusters) {
+function endpoint(ID, clusters, failures = 0) {
     const calls = [];
+    const state = {failures};
     return {
         ID,
         calls,
+        failNextWrites: (n) => {
+            state.failures = n;
+        },
         supportsInputCluster: (key) => clusters.includes(key),
         supportsOutputCluster: () => false,
-        write: async (cluster, payload) => calls.push({op: 'write', cluster, payload}),
+        write: async (cluster, payload, options) => {
+            calls.push({op: 'write', cluster, payload, options});
+            if (state.failures > 0) {
+                state.failures -= 1;
+                throw new Error('MAC_TRANSACTION_EXPIRED');
+            }
+        },
         read: async (cluster, attrs) => calls.push({op: 'read', cluster, attrs}),
         command: async (cluster, cmd) => calls.push({op: 'command', cluster, cmd}),
         getClusterAttributeValue: () => undefined,
@@ -121,7 +131,9 @@ const directionConvert = (data, ID) =>
         const meta = context();
         meta.state = {speed_3: 4};
         const result = await toZigbee('state').convertSet(entity, 'state', 'OFF', meta);
-        assert.deepEqual(entity.calls, [{op: 'write', cluster: 'hvacFanCtrl', payload: {fanMode: 0}}]);
+        assert.equal(entity.calls.length, 1);
+        assert.equal(entity.calls[0].cluster, 'hvacFanCtrl');
+        assert.deepEqual(entity.calls[0].payload, {fanMode: 0});
         assert.deepEqual(result, {state: {state: 'OFF'}});
     });
 
@@ -130,7 +142,9 @@ const directionConvert = (data, ID) =>
         const meta = context();
         meta.state = {speed_3: 3};
         const result = await toZigbee('state').convertSet(entity, 'state', 'ON', meta);
-        assert.deepEqual(entity.calls, [{op: 'write', cluster: 'hvacFanCtrl', payload: {fanMode: 3}}]);
+        assert.equal(entity.calls.length, 1);
+        assert.equal(entity.calls[0].cluster, 'hvacFanCtrl');
+        assert.deepEqual(entity.calls[0].payload, {fanMode: 3});
         assert.deepEqual(result, {state: {state: 'ON', speed: 3}});
     });
 
@@ -142,6 +156,27 @@ const directionConvert = (data, ID) =>
         meta.message = {state: 'ON'};
         await toZigbee('state').convertSet(entity, 'state', 'ON', meta);
         assert.deepEqual(entity.calls, [{op: 'command', cluster: 'genOnOff', cmd: 'on'}]);
+    });
+
+    await test('a write whose reply is late is retried once', async () => {
+        // the coordinator's queued delivery makes replies late often enough to
+        // matter; both attempts write the same absolute value
+        const entity = fanEndpoint(2);
+        entity.failNextWrites(1);
+        await toZigbee('direction').convertSet(entity, 'direction', 'out', context());
+        assert.equal(entity.calls.filter((c) => c.op === 'write').length, 2);
+        assert.deepEqual(entity.calls[1].payload, {direction: 1});
+        assert.ok(entity.calls[1].options.timeout >= 20000);
+    });
+
+    await test('a second failure is reported, not swallowed', async () => {
+        const entity = fanEndpoint(2);
+        entity.failNextWrites(2);
+        await assert.rejects(
+            toZigbee('direction').convertSet(entity, 'direction', 'in', context()),
+            /MAC_TRANSACTION_EXPIRED/,
+        );
+        assert.equal(entity.calls.filter((c) => c.op === 'write').length, 2);
     });
 
     await test('a speed outside 1..4 is clamped', async () => {
@@ -156,7 +191,9 @@ const directionConvert = (data, ID) =>
         for (const [value, raw] of [['in', 0], ['out', 1], ['auto', 2]]) {
             const entity = fanEndpoint(2);
             await toZigbee('direction').convertSet(entity, 'direction', value, context());
-            assert.deepEqual(entity.calls, [{op: 'write', cluster: 'espDirection', payload: {direction: raw}}]);
+            assert.equal(entity.calls.length, 1);
+            assert.equal(entity.calls[0].cluster, 'espDirection');
+            assert.deepEqual(entity.calls[0].payload, {direction: raw});
         }
     });
 

@@ -24,7 +24,48 @@ use crate::zigbee::EP_MASTER;
 use crate::zigbee::ZbStack;
 use crate::zigbee::clusters::*;
 
-pub async fn send_state_report(stack: &ZbStack, bit: u32) -> bool {
+/// Why a report attempt did not reach the coordinator.
+///
+/// The distinction matters: `NoAck` means the frame went out and nobody
+/// acknowledged it (link or security), `SecurityFail` means it never got that
+/// far, and the rest are addressing or framing mistakes on our side.
+#[derive(Clone, Copy)]
+pub enum ReportError {
+    /// The frame could not be built (should never happen).
+    Build,
+    /// The send returned an error before a confirm arrived.
+    Send,
+    /// The coordinator answered, but not with success.
+    Confirm(zigbee::aps::apsde::ApsdeSapConfirmStatus),
+}
+
+impl ReportError {
+    pub fn name(&self) -> &'static str {
+        match self {
+            ReportError::Build => "build",
+            ReportError::Send => "send",
+            ReportError::Confirm(zigbee::aps::apsde::ApsdeSapConfirmStatus::Success) => "success?",
+            ReportError::Confirm(zigbee::aps::apsde::ApsdeSapConfirmStatus::NoShortAddress) => {
+                "NoShortAddress"
+            }
+            ReportError::Confirm(zigbee::aps::apsde::ApsdeSapConfirmStatus::NoBoundDevice) => {
+                "NoBoundDevice"
+            }
+            ReportError::Confirm(zigbee::aps::apsde::ApsdeSapConfirmStatus::SecurityFail) => {
+                "SecurityFail"
+            }
+            ReportError::Confirm(zigbee::aps::apsde::ApsdeSapConfirmStatus::NoAck) => "NoAck",
+            ReportError::Confirm(zigbee::aps::apsde::ApsdeSapConfirmStatus::AsduTooLong) => {
+                "AsduTooLong"
+            }
+            ReportError::Confirm(zigbee::aps::apsde::ApsdeSapConfirmStatus::Unsupported) => {
+                "Unsupported"
+            }
+        }
+    }
+}
+
+pub async fn send_state_report(stack: &ZbStack, bit: u32) -> Result<(), ReportError> {
     use core::sync::atomic::AtomicU8;
     static SEQ: AtomicU8 = AtomicU8::new(0);
     let seq = SEQ.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
@@ -45,13 +86,13 @@ pub async fn send_state_report(stack: &ZbStack, bit: u32) -> bool {
             )
         });
         if !used {
-            return true; // nothing behind this bit, drop it
+            return Ok(()); // nothing behind this bit, drop it
         }
         let Ok(frame) = AttributeReportBuilder::new(&mut buf, seq)
             .and_then(|b| b.push(&A_FANMODE, mode))
             .and_then(AttributeReportBuilder::finish)
         else {
-            return false;
+            return Err(ReportError::Build);
         };
         (EP_FAN0 + slot as u8, frame)
     } else if bit < 16 {
@@ -64,13 +105,13 @@ pub async fn send_state_report(stack: &ZbStack, bit: u32) -> bool {
             )
         });
         if !used {
-            return true;
+            return Ok(());
         }
         let Ok(frame) = AttributeReportBuilder::new(&mut buf, seq)
             .and_then(|b| b.push(&A_DIRECTION, dir))
             .and_then(AttributeReportBuilder::finish)
         else {
-            return false;
+            return Err(ReportError::Build);
         };
         (EP_FAN0 + slot as u8, frame)
     } else {
@@ -79,34 +120,38 @@ pub async fn send_state_report(stack: &ZbStack, bit: u32) -> bool {
             .and_then(|b| b.push(&A_ONOFF, pairing))
             .and_then(AttributeReportBuilder::finish)
         else {
-            return false;
+            return Err(ReportError::Build);
         };
         (EP_MASTER, frame)
     };
 
-    matches!(
-        stack
-            .device()
-            .send_attribute_report(
-                ZclReportTarget {
-                    dst_short: 0,
-                    src_endpoint,
-                    dst_endpoint: 1,
-                    profile_id: profile::HOME_AUTOMATION,
-                },
-                frame,
-                &mut AsyncDelay,
-            )
-            .await,
-        Ok(confirm) if confirm.status == zigbee::aps::apsde::ApsdeSapConfirmStatus::Success
-    )
+    match stack
+        .device()
+        .send_attribute_report(
+            ZclReportTarget {
+                dst_short: 0,
+                src_endpoint,
+                dst_endpoint: 1,
+                profile_id: profile::HOME_AUTOMATION,
+            },
+            frame,
+            &mut AsyncDelay,
+        )
+        .await
+    {
+        Ok(confirm) if confirm.status == zigbee::aps::apsde::ApsdeSapConfirmStatus::Success => {
+            Ok(())
+        }
+        Ok(confirm) => Err(ReportError::Confirm(confirm.status)),
+        Err(_) => Err(ReportError::Send),
+    }
 }
 
 /// Send the pairing stage + paired count to the coordinator.
 ///
 /// Returns whether it was accepted, so a failed attempt can be retried instead
 /// of leaving the coordinator with a stale value forever.
-pub async fn send_pairing_report(stack: &ZbStack) -> bool {
+pub async fn send_pairing_report(stack: &ZbStack) -> Result<(), ReportError> {
     use core::sync::atomic::AtomicU8;
     static SEQ: AtomicU8 = AtomicU8::new(0);
     let seq = SEQ.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
@@ -125,9 +170,9 @@ pub async fn send_pairing_report(stack: &ZbStack) -> bool {
         .and_then(|b| b.push(&A_RX_REARM_COUNT, Uint16(rearms)))
         .and_then(AttributeReportBuilder::finish)
     else {
-        return false;
+        return Err(ReportError::Build);
     };
-    matches!(stack
+    match stack
         .device()
         .send_attribute_report(
             ZclReportTarget {
@@ -139,7 +184,12 @@ pub async fn send_pairing_report(stack: &ZbStack) -> bool {
             report,
             &mut AsyncDelay,
         )
-        .await,
-        Ok(confirm) if confirm.status == zigbee::aps::apsde::ApsdeSapConfirmStatus::Success
-    )
+        .await
+    {
+        Ok(confirm) if confirm.status == zigbee::aps::apsde::ApsdeSapConfirmStatus::Success => {
+            Ok(())
+        }
+        Ok(confirm) => Err(ReportError::Confirm(confirm.status)),
+        Err(_) => Err(ReportError::Send),
+    }
 }
