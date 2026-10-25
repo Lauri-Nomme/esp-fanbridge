@@ -226,11 +226,12 @@ pub fn stack_config(endpoints: &'static [EndpointDescriptor<'static>]) -> StackC
         },
         DeviceConfig {
             logical_type: LogicalType::EndDevice,
-            // bit7 allocate address, bit3 receiver-on-when-idle: this device is
-            // mains powered, so it listens instead of polling. A polling sleepy
-            // end device only fetches a queued frame when it asks its parent,
-            // which is where the occasional `MAC_TRANSACTION_EXPIRED` came from.
-            capability_information: CapabilityInformation(0x88),
+            // bit7 allocate address, bit3 receiver-on-when-idle, bit2 mains
+            // power: this device runs off USB and listens instead of polling.
+            // The power bit matters as much as the receiver bit - a parent that
+            // is told "battery" queues frames for a device it expects to poll,
+            // and they expire (MAC_TRANSACTION_EXPIRED) when it does not.
+            capability_information: CapabilityInformation(0x8c),
             discovery_type: DiscoveryType::default(),
             tc_link_key_exchange: true,
         },
