@@ -32,7 +32,7 @@ async function test(name, fn) {
 /** A fake coordinator endpoint that records what the converter does to it. */
 function endpoint(ID, clusters, failures = 0) {
     const calls = [];
-    const state = {failures};
+    const state = {failures, values: {}};
     return {
         ID,
         calls,
@@ -48,9 +48,24 @@ function endpoint(ID, clusters, failures = 0) {
                 throw new Error('MAC_TRANSACTION_EXPIRED');
             }
         },
-        read: async (cluster, attrs) => calls.push({op: 'read', cluster, attrs}),
+        read: async (cluster, attrs) => {
+            calls.push({op: 'read', cluster, attrs});
+            if (state.failures > 0) {
+                state.failures -= 1;
+                throw new Error('MAC_TRANSACTION_EXPIRED');
+            }
+            // a read-back returns whatever the device currently holds
+            for (const attribute of attrs) {
+                if (state.values[`${cluster}.${attribute}`] === undefined) {
+                    state.values[`${cluster}.${attribute}`] = state.pending?.[`${cluster}.${attribute}`];
+                }
+            }
+        },
+        hold: (cluster, attribute, value) => {
+            state.values[`${cluster}.${attribute}`] = value;
+        },
         command: async (cluster, cmd) => calls.push({op: 'command', cluster, cmd}),
-        getClusterAttributeValue: () => undefined,
+        getClusterAttributeValue: (cluster, attribute) => state.values[`${cluster}.${attribute}`],
     };
 }
 
@@ -158,25 +173,32 @@ const directionConvert = (data, ID) =>
         assert.deepEqual(entity.calls, [{op: 'command', cluster: 'genOnOff', cmd: 'on'}]);
     });
 
-    await test('a write whose reply is late is retried once', async () => {
-        // the coordinator's queued delivery makes replies late often enough to
-        // matter; both attempts write the same absolute value
+    await test('a lost reply is confirmed by reading the value back', async () => {
+        // the device applied it; only the reply was lost, so the read-back says so
         const entity = fanEndpoint(2);
+        entity.hold('espDirection', 'direction', 1); // the device already holds it
         entity.failNextWrites(1);
         await toZigbee('direction').convertSet(entity, 'direction', 'out', context());
-        assert.equal(entity.calls.filter((c) => c.op === 'write').length, 2);
-        assert.deepEqual(entity.calls[1].payload, {direction: 1});
-        assert.ok(entity.calls[1].options.timeout >= 20000);
+        const ops = entity.calls.map((c) => c.op);
+        assert.deepEqual(ops, ['write', 'read']);
     });
 
-    await test('a second failure is reported, not swallowed', async () => {
+    await test('a write that did not land is reported', async () => {
         const entity = fanEndpoint(2);
-        entity.failNextWrites(2);
+        entity.hold('espDirection', 'direction', 0); // device still says "in"
+        entity.failNextWrites(1);
         await assert.rejects(
-            toZigbee('direction').convertSet(entity, 'direction', 'in', context()),
-            /MAC_TRANSACTION_EXPIRED/,
+            toZigbee('direction').convertSet(entity, 'direction', 'out', context()),
+            /expected 1/,
         );
-        assert.equal(entity.calls.filter((c) => c.op === 'write').length, 2);
+    });
+
+    await test('a lost reply with a failed read-back is assumed applied', async () => {
+        // the write reaches the device; only replies go missing, and a throw
+        // would make Zigbee2MQTT undo a command that worked
+        const entity = fanEndpoint(2);
+        entity.failNextWrites(2); // write and read both fail
+        await toZigbee('direction').convertSet(entity, 'direction', 'out', context());
     });
 
     await test('a speed outside 1..4 is clamped', async () => {
