@@ -228,7 +228,34 @@ seconds later - the parent was queueing for a sleepy child, because the device
 had only ever *resumed* since it gained `rxOnWhenIdle`. After `rejoin`, writes
 were answered one-for-one in under a second.
 
-### 49. The device goes deaf while an acknowledged send waits — **next, with evidence**
+### 50. Root cause: the stack resumed on the wrong channel and then threw the network away — **fixed in the fork**
+
+Two stack bugs explain why a rebooted device stopped accepting commands while its
+reports kept working:
+
+1. **Resume used `channels.start` as the channel.** Once channels became a range
+   (11..27, so a channel move needs no reflash), a network on 25 was resumed on
+   11. The rejoin went out on the wrong channel, nothing answered, and the device
+   fell back to *commissioning* - which needs a permit-join a rebooted device
+   should not need.
+2. **A refused rejoin forgot the network.** `commission` called
+   `forget_network()` on any rejoin failure. Since that runs on every boot, one
+   refusal - a busy parent, a coordinator that restarted, a stale child entry -
+   left the device off the network until somebody opened a join window. That is
+   the bouncing: HA publishes, the device is not on the network, the state flips
+   back, and reports that were queued still trickle out, which makes it look like
+   a delivery problem.
+
+Both are fixed in `Lauri-Nomme/zigbee-rs`, branch `fanbridge-fixes`, together with
+a scan fallback for the BDB rejoin and a non-fatal transport-key poll (the receive
+loop can install the key first). The firmware now depends on that revision.
+
+Verified on hardware with the network on channel 25: after a reboot the log shows
+`network found on channel 25` and `resuming on network: addr=0x14da ch 25`; a
+refused rejoin logs `keeping the network (retrying)`; and a command sent
+afterwards applies (`tx` climbs, 4 frames reach the coordinator).
+
+### 49. The device goes deaf while an acknowledged send waits — **superseded by #50**
 
 After a fresh commission everything works: commands apply (`tx` climbs), reports
 are acknowledged, `writeRsp` arrives. Hours (or a reboot) later the same device

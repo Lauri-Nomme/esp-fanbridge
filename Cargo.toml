@@ -42,9 +42,12 @@ critical-section = "1.2"
 static_cell = "2.1"
 byte = "0.2.7"
 
-# Zigbee stack, pinned to the exact upstream revision this firmware was
-# developed and tested against (https://github.com/zigbee-rs/zigbee-rs).
-zigbee = { git = "https://github.com/zigbee-rs/zigbee-rs", rev = "b9dc150f3ef0e96cbbdc0d94897316ef7094e98e", features = ["storage"] }
-zigbee-types = { git = "https://github.com/zigbee-rs/zigbee-rs", rev = "b9dc150f3ef0e96cbbdc0d94897316ef7094e98e" }
-zigbee-mac = { git = "https://github.com/zigbee-rs/zigbee-rs", rev = "b9dc150f3ef0e96cbbdc0d94897316ef7094e98e" }
-zigbee-cluster-library = { git = "https://github.com/zigbee-rs/zigbee-rs", rev = "b9dc150f3ef0e96cbbdc0d94897316ef7094e98e" }
+# Zigbee stack, pinned to the fork's `fanbridge-fixes` branch: upstream cannot
+# find the network again after a reboot when the configured channels are a range
+# (it resumes on `channels.start`), forgets the network when a rejoin is refused,
+# and its BDB rejoin has no scan fallback. See the branch for the three commits;
+# they are candidates for upstream once they have been reviewed.
+zigbee = { git = "https://github.com/Lauri-Nomme/zigbee-rs", rev = "43f53cb1068c3603cd20cea8dff08894e96f2c2b", features = ["storage"] }
+zigbee-types = { git = "https://github.com/Lauri-Nomme/zigbee-rs", rev = "43f53cb1068c3603cd20cea8dff08894e96f2c2b" }
+zigbee-mac = { git = "https://github.com/Lauri-Nomme/zigbee-rs", rev = "43f53cb1068c3603cd20cea8dff08894e96f2c2b" }
+zigbee-cluster-library = { git = "https://github.com/Lauri-Nomme/zigbee-rs", rev = "43f53cb1068c3603cd20cea8dff08894e96f2c2b" }
