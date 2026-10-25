@@ -228,6 +228,24 @@ seconds later - the parent was queueing for a sleepy child, because the device
 had only ever *resumed* since it gained `rxOnWhenIdle`. After `rejoin`, writes
 were answered one-for-one in under a second.
 
+### 47. Zigbee channel moved 11 → 25 — **done, devices must re-pair**
+
+WiFi around the flat is crowded on channel 6 (three APs, the strongest -38 dBm from
+the IoT SSID itself); Zigbee 11 sat 22 MHz away and Zigbee traffic was intermittent
+in both directions. The network is now on **channel 25** (2475 MHz, ~28 MHz above
+the strong AP and ~3 MHz above a weak ch-11 one), same PAN and extended PAN, so
+nothing about the identity changed.
+
+Everything on the old channel has to re-pair: the fan bridge rejoined on its own
+(`leave` → commission), the other end devices need their pairing button. The
+firmware now scans channels 11..26 when commissioning, so a future channel move
+needs no reflash.
+
+**Measured effect:** the fan bridge's attribute reports went from "arrive late, in
+clumps, with failures" to **17/17 acknowledged in one flush**, so the RF link is
+now good. Reply frames (`writeRsp`/`defaultRsp`) are still mostly lost - see #46,
+which is now a clean signal rather than one buried in interference.
+
 ### 46. `rxOnWhenIdle` cannot be used: the transport-key poll loses the key — **blocker**
 
 The parent negotiates "keepalive by MAC data poll" (`nwkParentInformation = 0x01`),

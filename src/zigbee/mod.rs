@@ -54,7 +54,9 @@ use crate::state::mark_all_state;
 // ==========================================================================
 
 pub const NWK_EPID: u64 = 0xd928_6c81_6768_f40b;
-pub const NWK_CHANNEL: u8 = 11;
+/// Channels to scan when commissioning: every 2.4 GHz channel, so moving the
+/// network to a clearer one does not need a firmware change.
+pub const NWK_CHANNELS: core::ops::Range<u8> = 11..27;
 pub const ZIGBEE_FLASH: core::ops::Range<u32> = 0x3f_0000..0x3f_4000;
 
 pub const EP_MASTER: u8 = 1;
@@ -221,7 +223,7 @@ pub fn stack_config(endpoints: &'static [EndpointDescriptor<'static>]) -> StackC
     StackConfig::new(
         NetworkConfig {
             extended_pan_id: IeeeAddress(NWK_EPID),
-            channels: NWK_CHANNEL..NWK_CHANNEL + 1,
+            channels: NWK_CHANNELS,
             scan_duration: 5,
         },
         DeviceConfig {
