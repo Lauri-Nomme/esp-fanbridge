@@ -17,6 +17,7 @@ use core::sync::atomic::Ordering;
 use embassy_sync::blocking_mutex::Mutex as CsMutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_time::Delay as AsyncDelay;
+use embassy_time::Duration;
 use embassy_time::Timer;
 use esp_println::println;
 use zigbee::CurrentPowerMode;
@@ -359,7 +360,19 @@ pub async fn announce_task(stack: &'static ZbStack) {
 
 #[embassy_executor::task]
 pub async fn stack_task(stack: &'static ZbStack) {
-    let outcome = stack.run(AsyncDelay).await;
-    println!("zigbee stack stopped: {outcome:?}");
-    esp_hal::system::software_reset();
+    // A stack that stops is normally a commissioning attempt that was refused -
+    // "no suitable parent ... permit_joining=false" when nobody has opened the
+    // join window. Resetting there turns a recoverable situation into a reboot
+    // loop: the device never stays up long enough to be paired, and nothing on
+    // the console explains why. Keep running, retry on a slow cadence, and let
+    // the coordinator's join window do the deciding.
+    let mut backoff_s = 5u64;
+    loop {
+        let outcome = stack.run(AsyncDelay).await;
+        println!(
+            "zigbee stack stopped: {outcome:?} - retrying in {backoff_s}s (open permit-join if it says NotPermitted)"
+        );
+        Timer::after(Duration::from_secs(backoff_s)).await;
+        backoff_s = (backoff_s * 2).min(120);
+    }
 }

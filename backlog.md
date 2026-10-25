@@ -228,6 +228,24 @@ seconds later - the parent was queueing for a sleepy child, because the device
 had only ever *resumed* since it gained `rxOnWhenIdle`. After `rejoin`, writes
 were answered one-for-one in under a second.
 
+### 48. A refused join rebooted the device — **fixed, and it was today's "bounce"**
+
+The stack task reset the device whenever the stack stopped. After the channel move
+the device needed a fresh commission, the join window was closed, the coordinator
+answered `NotPermitted`, and the firmware reset itself — every 3.7 seconds. From
+outside that looks like a device that is *there* but ignores commands: Home
+Assistant publishes, the write fails, the state flips back. It was diagnosed with
+the 802.15.4 sniffer example (`c6/firmware/examples/esp-zsniff`): the coordinator's
+frames reach the device (`dataConfirm status: 0`) and the device answers nothing,
+because it is rebooting before it can.
+
+Fixed: the stack task retries with a backoff (5 s doubling to 120 s) and keeps
+running, printing the reason (`permit_joining=false` → open the join window). A
+device that cannot join is now recoverable instead of a reboot loop.
+
+Measured afterwards, on channel 25: 22 reports acknowledged, 2 real
+transmissions, writes applied - the link is healthy.
+
 ### 47. Zigbee channel moved 11 → 25 — **done, devices must re-pair**
 
 WiFi around the flat is crowded on channel 6 (three APs, the strongest -38 dBm from
