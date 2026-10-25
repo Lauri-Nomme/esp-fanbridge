@@ -226,16 +226,7 @@ pub fn stack_config(endpoints: &'static [EndpointDescriptor<'static>]) -> StackC
         },
         DeviceConfig {
             logical_type: LogicalType::EndDevice,
-
-            // bit7 allocate address, bit2 mains power. Bit 3 (receiver on when
-            // idle) is deliberately clear: this parent answers the end-device
-            // timeout request with `nwkParentInformation = 0x01`, i.e. "keepalive
-            // by MAC data poll" - it queues frames for us and hands them over on
-            // a poll. Declaring rx-on made the stack stop polling while the
-            // parent kept queueing, so commands sat in its indirect queue until
-            // they expired (MAC_TRANSACTION_EXPIRED): the "it bounces back"
-            // symptom. A 100 ms poll is what this parent expects.
-            capability_information: CapabilityInformation(0x84),
+            capability_information: CapabilityInformation(0x8c),
             discovery_type: DiscoveryType::default(),
             tc_link_key_exchange: true,
         },
