@@ -159,7 +159,18 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
     ));
     let storage = zb_stack::storage::init_with_flash(flash, ZIGBEE_FLASH).await;
     let ieee = esp_radio::ieee802154::Ieee802154::new(peripherals.IEEE802154);
-    let mac = zigbee_mac::esp::EspMlme::new(ieee, esp_radio::ieee802154::Config::default());
+    // `Config::default()` has both acknowledgements off. The association path
+    // sets them, but a *resume* - what happens on every normal boot - does not,
+    // so the device received and applied commands without ever acknowledging
+    // them: the coordinator retried, gave up (`MAC_NO_ACK`) and let the frame
+    // expire in its indirect queue, while the command had in fact been executed.
+    // That is the "it bounces back" symptom, and it survived every other fix.
+    let radio = esp_radio::ieee802154::Config {
+        auto_ack_tx: true,
+        auto_ack_rx: true,
+        ..Default::default()
+    };
+    let mac = zigbee_mac::esp::EspMlme::new(ieee, radio);
     println!("Zigbee IEEE address: {:#018x}", mac.ieee_address());
     let stack: &'static ZbStack = STACK.init(zb_stack::Stack::new(
         mac,
