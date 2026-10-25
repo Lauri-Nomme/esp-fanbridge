@@ -229,6 +229,14 @@ were answered one-for-one in under a second.
 
 ### 45. Router role instead of end device — **M, needs a deliberate test**
 
+**Later evidence (2026-10-25, 03:15).** `rejoin` is not a reliable cure: one run
+succeeded and delivery was sub-second for a while, the next was refused outright
+(`secure rejoin failed (NotPermitted)`, then `MacError` on the trust-center
+fallback), and a write timed out again a minute later. That is consistent with
+the parent not holding a usable child entry for this device at all, in which
+case only a fresh commission (permit-join open) changes its mind. The indirect
+queue is the root of the class, so the router role stays the real fix.
+
 `DeviceConfig.logical_type` supports a router, and this device is mains powered.
 A router is addressed directly, which removes the coordinator's indirect queue
 and with it the class of failure where a command expires before it is delivered.
