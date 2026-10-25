@@ -485,6 +485,29 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
             }
         }
 
+        // ---- re-associate on request: a capability change (e.g. gaining
+        // rx-on-when-idle) is only visible to the parent on a fresh association
+        if REJOIN_REQ.swap(false, Ordering::Relaxed) {
+            console.outln("rejoining: fresh association, same keys...");
+            let epid = zigbee_types::IeeeAddress(*zb_stack::nwk::nib::get_ref().extended_panid());
+            let outcome = stack.device().rejoin(epid, 11..27, 3).await;
+            let mut b = [0u8; 80];
+            let pos = {
+                use core::fmt::Write;
+                let mut w = Writer80 {
+                    buf: &mut b,
+                    pos: 0,
+                };
+                let _ = match &outcome {
+                    Ok(confirm) => write!(w, "rejoin: status={:?}", confirm.status),
+                    Err(e) => write!(w, "rejoin failed: {e:?}"),
+                };
+                w.pos
+            };
+            let text = core::str::from_utf8(&b[..pos]).unwrap_or("");
+            console.outln(text);
+        }
+
         // ---- apply a pending endpoint change (console pairing or a command)
         let asked = REBOOT_AT_MS.load(Ordering::Relaxed);
         if asked != 0 && now_ms >= u64::from(asked) {

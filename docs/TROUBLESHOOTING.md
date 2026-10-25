@@ -139,11 +139,26 @@ zb: slot 1 "lr-l" speed -> 2
 ```
 
 * **No `zb:` line and the Zigbee2MQTT log says `MAC_TRANSACTION_EXPIRED`**: the
-  frame never reached the device. This is the failure that makes a value flip
-  back in HA - HA shows the optimistic value, the write does not land, the next
-  report restores reality. The device now keeps its receiver on (it is mains
-  powered) which removed the poll loop that caused it; if it appears again, the
-  `status` counters and the log line are the things to capture.
+  frame never reached the device in time. Zigbee2MQTT publishes the optimistic
+  value, its 10-second ZCL timeout expires, and the device's next report restores
+  reality - that is the "it bounces back" symptom.
+
+  This device is an end device, so a coordinator delivers to it through an
+  *indirect* path with a persistence timeout. `rxOnWhenIdle` removed the polling
+  that used to make that path cheap, but the queue is still there: commands
+  usually land in under a second, and a burst can still time out.
+
+  Two things to do:
+
+  1. `rejoin` on the console. It re-associates (keys kept) and gives the parent a
+     fresh child entry - the fix when the parent still holds an entry from
+     before the device gained `rxOnWhenIdle`, or after the device has been off
+     the network for a while. Verified: writes that were batching and timing out
+     became one-for-one in under a second.
+  2. If it recurs often, the structural fix is to let this device join as a
+     **router** (it is mains powered): routers are addressed directly, so there is
+     no indirect queue to expire. That changes the mesh role and is worth doing
+     deliberately, not at three in the morning.
 * **`UNSUPPORTED_CLUSTER` or `UNSUPPORTED_ATTRIBUTE`**: the converter is writing
   the wrong cluster or attribute for that endpoint - typically an old converter
   file. Compare with `z2m/esp-fanbridge.js` in this repository.

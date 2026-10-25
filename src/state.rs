@@ -146,6 +146,15 @@ pub static REPORT_OK: AtomicU32 = AtomicU32::new(0);
 pub static REPORT_FAIL: AtomicU32 = AtomicU32::new(0);
 pub static UPTIME_MS: AtomicU32 = AtomicU32::new(0);
 
+/// Set by the console, drained by the main loop: re-ascociate with the network.
+///
+/// A device that only ever *resumes* keeps the parent's child-table entry from
+/// the association it originally joined with. If the capability information has
+/// changed since (this device went from sleepy to `rxOnWhenIdle`), the parent
+/// keeps queueing frames for a device that no longer polls, so commands arrive
+/// late, in batches, or expire.
+pub static REJOIN_REQ: AtomicBool = AtomicBool::new(false);
+
 /// Uptime at which to restart, or 0. A coordinator command sets it instead of
 /// resetting on the spot, so the write response still reaches the caller.
 pub static REBOOT_AT_MS: AtomicU32 = AtomicU32::new(0);
