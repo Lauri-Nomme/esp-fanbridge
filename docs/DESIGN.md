@@ -147,9 +147,12 @@ Resolved since the first draft of this file, listed so nobody re-opens them:
 * **State reporting** is pushed from a task of its own with retries, for every
   change from any source; `status` counts acknowledgements (`rep ok/fail`).
 * **`Bind` requests** are answered by `zigbee-core`; the stack handles them.
-* **Receive path**: the device is mains powered and declares
-  `rxOnWhenIdle`, so it listens instead of polling for queued frames. The
-  earlier attempt failed with `MacError(NoData)`; the current stack does not.
+* **Receive path**: the device polls every 100 ms and does **not** declare
+  `rxOnWhenIdle`. It spent a build declaring rx-on, on the theory that a
+  mains-powered device should just listen; the parent, however, answers the
+  end-device timeout request with `nwkParentInformation = 0x01` ("keepalive by
+  MAC data poll") and keeps queueing frames for a polling child, so commands sat
+  in its indirect queue and expired. Honour what the parent negotiates.
 * **Direction** is a manufacturer-specific cluster (`espDirection` `0xFC01`) on
   the fan's own endpoint, not a second endpoint.
 * **Endpoint changes** no longer need a console: the pairing cluster answers a
