@@ -137,6 +137,11 @@ pub static EXPOSED_NOW: AtomicU32 = AtomicU32::new(0);
 pub static REARMS_NOW: AtomicU32 = AtomicU32::new(0);
 /// Counters for the `status` command.
 pub static TX_COUNT: AtomicU32 = AtomicU32::new(0);
+/// Ignore received 433 MHz frames until this uptime: our own transmission is
+/// metres away from our own antenna, so the receiver hears it and the decoder
+/// can turn it into a *different* button (one bit of the envelope is enough),
+/// which then overwrites the state the command just set.
+pub static IGNORE_RX_UNTIL_MS: AtomicU32 = AtomicU32::new(0);
 pub static RX_COUNT: AtomicU32 = AtomicU32::new(0);
 pub static REARM_COUNT: AtomicU32 = AtomicU32::new(0);
 /// Attribute reports the coordinator acknowledged, and ones that had to be
