@@ -228,6 +228,15 @@ seconds later - the parent was queueing for a sleepy child, because the device
 had only ever *resumed* since it gained `rxOnWhenIdle`. After `rejoin`, writes
 were answered one-for-one in under a second.
 
+### 52. The stack's own log path could wedge it too — **fixed**
+
+Fixing the console (#51) left `log` alone: the stack logs through the `log` crate
+and the default backend writes straight into the USB FIFO, so a debug-level build
+with nobody reading could still block the stack task. The firmware now installs
+its own backend that formats into a 2 KiB ring, drained by the main loop into the
+(dropping) console. Level is runtime-switchable with `log <level>`, and `status`
+reports how many bytes were dropped.
+
 ### 51. THE root cause: console output blocked and wedged the device — **fixed**
 
 For days the symptom was "flipping a fan in Home Assistant bounces back", and it
