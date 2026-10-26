@@ -435,13 +435,7 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
                 if now < u64::from(IGNORE_RX_UNTIL_MS.load(Ordering::Relaxed)) {
                     // our own transmission: log it once, but do not let it touch
                     // the state (see IGNORE_RX_UNTIL_MS)
-                    console.outln(fmt_rx(
-                        &mut linebuf,
-                        bits >> 4,
-                        (bits & 0xF) as u8,
-                        bits,
-                        0,
-                    ));
+                    console.outln(fmt_rx(&mut linebuf, bits >> 4, (bits & 0xF) as u8, bits, 0));
                     continue;
                 }
                 if last_code != Some(bits) || now.saturating_sub(last_ms) > 800 {
