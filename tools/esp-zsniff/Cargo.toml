@@ -1,0 +1,29 @@
+[workspace]
+
+[package]
+name = "esp-zsniff"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = ["esp32c6"]
+esp32c6 = [
+    "dep:esp32c6-pac",
+    "esp-alloc/esp32c6",
+    "esp-backtrace/esp32c6",
+    "esp-bootloader-esp-idf/esp32c6",
+    "esp-hal/esp32c6",
+    "esp-radio/esp32c6",
+    "esp-rtos/esp32c6",
+]
+
+[dependencies]
+esp-alloc = { version = "0.10.0" }
+esp-backtrace = { version = "0.19.0", features = ["panic-handler", "println"] }
+esp32c6-pac = { package = "esp32c6", version = "=0.23.2", optional = true }
+esp-bootloader-esp-idf = { version = "0.5.0" }
+esp-hal = { version = "1.1.0", features = ["log-04", "unstable"] }
+esp-println = { version = "0.17.0", features = ["log-04"] }
+esp-radio = { version = "1.0.0-beta.0", features = ["ieee802154", "unstable"] }
+esp-rtos = { version = "0.3.0", features = ["embassy", "log-04"] }
+embassy-executor = "0.10.0"
