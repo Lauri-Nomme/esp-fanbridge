@@ -10,8 +10,8 @@
 use core::cell::RefCell;
 use core::fmt::Write;
 
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::blocking_mutex::Mutex;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 
 /// Enough for a burst of diagnostics, small enough to stay cheap.
 const RING: usize = 2048;
