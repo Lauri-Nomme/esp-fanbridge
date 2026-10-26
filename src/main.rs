@@ -41,6 +41,7 @@ use esp_println::println;
 mod config;
 mod console;
 mod led;
+mod logring;
 mod pairing;
 mod panic_log;
 mod radio;
@@ -90,7 +91,6 @@ esp_bootloader_esp_idf::esp_app_desc!();
 // ----------------------------------------------------------------------- main
 #[esp_rtos::main]
 async fn main(spawner: embassy_executor::Spawner) -> ! {
-    esp_println::logger::init_logger_from_env();
     let peripherals = esp_hal::init(esp_hal::Config::default());
 
     let sw_int = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
@@ -184,6 +184,7 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
     spawner.spawn(report_task(stack).expect("spawn report_task"));
 
     let mut console = Console::new(UsbSerialJtag::new(peripherals.USB_DEVICE));
+    logring::init(logring::default_level());
     console.outln("fan-bridge ready - type 'help'");
 
     let t0 = Instant::now();
@@ -203,6 +204,9 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
     let mut raw_prev = gdo0.is_high();
 
     loop {
+        // ---- hand buffered log lines to the console (drops when nobody reads)
+        logring::drain(|bytes| console.out_bytes(bytes));
+
         // ---- retire the panic record once the scheduler is up
         if panic_reported {
             panic_reported = false;

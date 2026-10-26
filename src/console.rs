@@ -67,6 +67,16 @@ impl<'d> Console<'d> {
     /// stops reading: a device in a cabinet, or a reader that was attached and
     /// went away, both end up with a full FIFO and a device that looks deaf
     /// while its radio is perfectly fine. Dropping output is the right trade.
+    /// Raw bytes, dropped when the host is not reading (see [`Console::out`]).
+    pub fn out_bytes(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            match self.usb.write_byte_nb(*byte) {
+                Ok(()) => {}
+                Err(_) => return,
+            }
+        }
+    }
+
     pub fn out(&mut self, s: &str) {
         for byte in s.as_bytes() {
             match self.usb.write_byte_nb(*byte) {
@@ -756,6 +766,35 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
             c.outln("rebooting...");
             esp_hal::system::software_reset();
         }
+        "log" => match it.next() {
+            None => {
+                let mut b = [0u8; 96];
+                let pos = {
+                    let mut w = Writer96 {
+                        buf: &mut b,
+                        pos: 0,
+                    };
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut w,
+                        format_args!(
+                            "stack log: {} (dropped {} bytes)",
+                            log::max_level(),
+                            crate::logring::dropped()
+                        ),
+                    );
+                    w.pos
+                };
+                let text = core::str::from_utf8(&b[..pos]).unwrap_or("");
+                c.outln(text);
+            }
+            Some(name) => match crate::logring::parse_level(name) {
+                Some(level) => {
+                    log::set_max_level(level);
+                    c.outln("stack log level changed");
+                }
+                None => c.outln("usage: log [off|error|warn|info|debug|trace]"),
+            },
+        },
         "rejoin" => {
             // not resetting here: the main loop drains this and awaits the join
             REJOIN_REQ.store(true, Ordering::Relaxed);
