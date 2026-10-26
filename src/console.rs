@@ -59,8 +59,23 @@ impl<'d> Console<'d> {
         }
     }
 
+    /// Write to the console without ever waiting for the host.
+    ///
+    /// The USB-Serial-JTAG transmits from a 64-byte FIFO that only drains when
+    /// something reads the other end. A blocking write therefore wedges
+    /// *whatever task logs* - including the Zigbee stack - as soon as the host
+    /// stops reading: a device in a cabinet, or a reader that was attached and
+    /// went away, both end up with a full FIFO and a device that looks deaf
+    /// while its radio is perfectly fine. Dropping output is the right trade.
     pub fn out(&mut self, s: &str) {
-        let _ = self.usb.write(s.as_bytes());
+        for byte in s.as_bytes() {
+            match self.usb.write_byte_nb(*byte) {
+                Ok(()) => {}
+                // fifo full: the host is not reading, drop the rest
+                Err(nb::Error::WouldBlock) => return,
+                Err(nb::Error::Other(_)) => return,
+            }
+        }
     }
 
     pub fn outln(&mut self, s: &str) {

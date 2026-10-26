@@ -228,6 +228,26 @@ seconds later - the parent was queueing for a sleepy child, because the device
 had only ever *resumed* since it gained `rxOnWhenIdle`. After `rejoin`, writes
 were answered one-for-one in under a second.
 
+### 51. THE root cause: console output blocked and wedged the device — **fixed**
+
+For days the symptom was "flipping a fan in Home Assistant bounces back", and it
+was reproducible only when *nobody was reading the serial console*. That was the
+clue I kept discarding: every debugging session attached a console and everything
+worked.
+
+The device's console (and every `println!`) writes into the USB-Serial-JTAG's
+64-byte FIFO, and `write` waits for room. With a host enumerated but not reading -
+a serial reader left attached, or nothing ever draining - the FIFO fills and the
+write blocks forever. Whatever task prints then stops: the Zigbee stack stops
+dispatching, so commands arrive, get MAC-acked and are never handled, and the
+coordinator retries until it gives up. The radio is fine, which is why reports
+already queued still trickled out and made this look like a delivery problem.
+
+**Measured:** kill the serial reader mid-soak and the device stops answering
+within 90 seconds (5 checks, 3 failed, `device=null` on every read). After the fix
+(`write_byte_nb`, drop when full) the same soak ran 19/19, then 60/60, with no
+reader attached at all.
+
 ### 50. Root cause: the stack resumed on the wrong channel and then threw the network away — **fixed in the fork**
 
 Two stack bugs explain why a rebooted device stopped accepting commands while its

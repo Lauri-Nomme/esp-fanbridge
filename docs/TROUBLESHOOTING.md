@@ -178,6 +178,14 @@ zb: slot 1 "lr-l" speed -> 2
   prints what the device transmits (`tx 0x… via bit-bang took … ms`) and every
   time the watchdog has to re-arm the receiver.
 
+## 10. Nothing works until a serial console is attached
+
+If the device behaves only while someone watches the console, the console is the
+cause: until now every write waited for room in the USB FIFO, so a host that was
+enumerated but not reading blocked whatever task was printing - the Zigbee stack
+included. Fixed by dropping output instead of waiting (backlog #51). A build from
+before that fix can be wedged the same way by `ESP_LOG=debug` with no reader.
+
 ## 9. The device stops accepting commands, but reports still arrive
 
 Symptom: Home Assistant publishes, the state flips back, and the device keeps

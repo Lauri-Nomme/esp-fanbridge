@@ -287,6 +287,9 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
         if req != 0 {
             let code = req & 0x00FF_FFFF;
             TX_COUNT.fetch_add(1, Ordering::Relaxed);
+            // the receiver is on the same board as the transmitter: ignore what
+            // it hears of our own burst (and its echoes) for a moment
+            IGNORE_RX_UNTIL_MS.store(now_ms.saturating_add(900) as u32, Ordering::Relaxed);
             let took = if TX_PACKET.load(Ordering::Relaxed) {
                 send_code_packet(&mut spi, &mut cs, code).await
             } else {
@@ -429,6 +432,18 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
             }
             if let Some(bits) = decoded {
                 let now = t0.elapsed().as_millis();
+                if now < u64::from(IGNORE_RX_UNTIL_MS.load(Ordering::Relaxed)) {
+                    // our own transmission: log it once, but do not let it touch
+                    // the state (see IGNORE_RX_UNTIL_MS)
+                    console.outln(fmt_rx(
+                        &mut linebuf,
+                        bits >> 4,
+                        (bits & 0xF) as u8,
+                        bits,
+                        0,
+                    ));
+                    continue;
+                }
                 if last_code != Some(bits) || now.saturating_sub(last_ms) > 800 {
                     let addr = bits >> 4;
                     let button = (bits & 0xF) as u8;
