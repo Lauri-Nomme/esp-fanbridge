@@ -41,6 +41,8 @@ embassy-embedded-hal = "0.5.0"
 critical-section = "1.2"
 static_cell = "2.1"
 byte = "0.2.7"
+# non-blocking console writes (`write_byte_nb`)
+nb = "1.1.0"
 
 # Zigbee stack, pinned to the fork's `fanbridge-fixes` branch: upstream cannot
 # find the network again after a reboot when the configured channels are a range
