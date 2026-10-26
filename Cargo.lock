@@ -780,6 +780,8 @@ dependencies = [
  "esp-rtos",
  "esp-storage",
  "esp32c6",
+ "log",
+ "nb 1.1.0",
  "static_cell",
  "zigbee",
  "zigbee-cluster-library",
@@ -2088,7 +2090,7 @@ dependencies = [
 [[package]]
 name = "zigbee"
 version = "0.1.0"
-source = "git+https://github.com/zigbee-rs/zigbee-rs?rev=b9dc150f3ef0e96cbbdc0d94897316ef7094e98e#b9dc150f3ef0e96cbbdc0d94897316ef7094e98e"
+source = "git+https://github.com/Lauri-Nomme/zigbee-rs?rev=90c852d1f9f196f011a5f5dd1086d88878145e70#90c852d1f9f196f011a5f5dd1086d88878145e70"
 dependencies = [
  "embedded-hal-async",
  "log",
@@ -2102,7 +2104,7 @@ dependencies = [
 [[package]]
 name = "zigbee-base-device-behavior"
 version = "0.1.0"
-source = "git+https://github.com/zigbee-rs/zigbee-rs?rev=b9dc150f3ef0e96cbbdc0d94897316ef7094e98e#b9dc150f3ef0e96cbbdc0d94897316ef7094e98e"
+source = "git+https://github.com/Lauri-Nomme/zigbee-rs?rev=90c852d1f9f196f011a5f5dd1086d88878145e70#90c852d1f9f196f011a5f5dd1086d88878145e70"
 dependencies = [
  "embedded-hal-async",
  "log",
@@ -2116,7 +2118,7 @@ dependencies = [
 [[package]]
 name = "zigbee-cluster-library"
 version = "0.1.0"
-source = "git+https://github.com/zigbee-rs/zigbee-rs?rev=b9dc150f3ef0e96cbbdc0d94897316ef7094e98e#b9dc150f3ef0e96cbbdc0d94897316ef7094e98e"
+source = "git+https://github.com/Lauri-Nomme/zigbee-rs?rev=90c852d1f9f196f011a5f5dd1086d88878145e70#90c852d1f9f196f011a5f5dd1086d88878145e70"
 dependencies = [
  "byte",
  "embedded-hal-async",
@@ -2130,7 +2132,7 @@ dependencies = [
 [[package]]
 name = "zigbee-core"
 version = "0.1.0"
-source = "git+https://github.com/zigbee-rs/zigbee-rs?rev=b9dc150f3ef0e96cbbdc0d94897316ef7094e98e#b9dc150f3ef0e96cbbdc0d94897316ef7094e98e"
+source = "git+https://github.com/Lauri-Nomme/zigbee-rs?rev=90c852d1f9f196f011a5f5dd1086d88878145e70#90c852d1f9f196f011a5f5dd1086d88878145e70"
 dependencies = [
  "aead 0.5.2",
  "aes",
@@ -2152,7 +2154,7 @@ dependencies = [
 [[package]]
 name = "zigbee-mac"
 version = "0.1.0"
-source = "git+https://github.com/zigbee-rs/zigbee-rs?rev=b9dc150f3ef0e96cbbdc0d94897316ef7094e98e#b9dc150f3ef0e96cbbdc0d94897316ef7094e98e"
+source = "git+https://github.com/Lauri-Nomme/zigbee-rs?rev=90c852d1f9f196f011a5f5dd1086d88878145e70#90c852d1f9f196f011a5f5dd1086d88878145e70"
 dependencies = [
  "byte",
  "embassy-futures",
@@ -2173,12 +2175,12 @@ dependencies = [
 [[package]]
 name = "zigbee-macros"
 version = "0.1.0"
-source = "git+https://github.com/zigbee-rs/zigbee-rs?rev=b9dc150f3ef0e96cbbdc0d94897316ef7094e98e#b9dc150f3ef0e96cbbdc0d94897316ef7094e98e"
+source = "git+https://github.com/Lauri-Nomme/zigbee-rs?rev=90c852d1f9f196f011a5f5dd1086d88878145e70#90c852d1f9f196f011a5f5dd1086d88878145e70"
 
 [[package]]
 name = "zigbee-types"
 version = "0.1.0"
-source = "git+https://github.com/zigbee-rs/zigbee-rs?rev=b9dc150f3ef0e96cbbdc0d94897316ef7094e98e#b9dc150f3ef0e96cbbdc0d94897316ef7094e98e"
+source = "git+https://github.com/Lauri-Nomme/zigbee-rs?rev=90c852d1f9f196f011a5f5dd1086d88878145e70#90c852d1f9f196f011a5f5dd1086d88878145e70"
 dependencies = [
  "atomic-waker",
  "byte",
