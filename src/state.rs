@@ -8,6 +8,7 @@
 
 use core::cell::RefCell;
 use core::sync::atomic::AtomicBool;
+use core::sync::atomic::AtomicU8;
 use core::sync::atomic::AtomicU32;
 use core::sync::atomic::Ordering;
 
@@ -289,6 +290,42 @@ pub fn request_reboot_in(delay_ms: u32) {
 /// per-edge bit-bang path. Off by default until the expanded stream has been
 /// confirmed against the physical fans; `txmode packet` switches at runtime.
 pub static TX_PACKET: AtomicBool = AtomicBool::new(false);
+/// Bit in a queued transmit code that means "send this one with the radio's
+/// packet engine". Resolved per slot when the code is queued, so one fan can be
+/// tried in packet mode while the others keep the bit-bang path (backlog #5).
+pub const TX_FLAG_PACKET: u32 = 0x8000_0000;
+/// Per-slot transmit-mode override: 0 = follow `txmode`, 1 = packet, 2 = async.
+///
+/// Runtime only, never persisted: it exists for the A/B experiment behind #5 -
+/// one fan at a time, everything else untouched, and a power cycle puts it back.
+pub static TX_MODE_SLOT: [AtomicU8; 8] = [const { AtomicU8::new(0) }; 8];
+
+/// Whether a code for `slot` should go out via the packet engine.
+pub fn tx_packet_for(slot: usize) -> bool {
+    match TX_MODE_SLOT.get(slot).map(|m| m.load(Ordering::Relaxed)) {
+        Some(1) => true,
+        Some(2) => false,
+        _ => TX_PACKET.load(Ordering::Relaxed),
+    }
+}
+
+/// Set the per-slot override (0 = default, 1 = packet, 2 = async).
+pub fn set_tx_mode_slot(slot: usize, mode: u8) {
+    if let Some(m) = TX_MODE_SLOT.get(slot) {
+        m.store(mode, Ordering::Relaxed);
+    }
+}
+
+/// Queue `code` for `slot`, resolving that slot's transmit mode now.
+pub fn tx_push_for(slot: usize, code: u32) {
+    tx_push(
+        code | if tx_packet_for(slot) {
+            TX_FLAG_PACKET
+        } else {
+            0
+        },
+    );
+}
 /// Frames sent per command and the silence between them. The remotes send only
 /// a few frames but with a long gap, which a picky receiver may need.
 pub static TX_REPEATS: AtomicU32 = AtomicU32::new(REPEATS);

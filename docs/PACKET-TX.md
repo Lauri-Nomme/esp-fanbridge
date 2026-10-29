@@ -358,3 +358,60 @@ It is *not* implemented here: the current receive path is proven, and the
 benefit (marginal sensitivity/robustness) has not been demonstrated to be worth
 the rewrite. The important part is that the answer is not "never" — it is "not
 with the packet engine, because this protocol has no sync word to frame on".
+
+---
+
+## 8. Running the experiment: one fan at a time
+
+The mode used to be global, which made every packet-mode test also a test of
+"what breaks when the other two fans lose their working path". It is per slot now:
+
+```
+txmode                    default and the eight overrides (def/pkt/asy)
+txmode packet             make packet the default (as before)
+txmode 3 packet           slot 3 -> packet engine, this boot only
+txmode 3 async            slot 3 -> bit-bang, this boot only
+```
+
+Procedure, per fan, ten seconds each:
+
+1. `txmode <slot> async` and send a speed the fan is *not* on. It moves - that
+   is the control.
+2. `txmode <slot> packet` and send another speed. Write down whether it moves.
+3. Repeat each three times. One success is not "works": `lr-r` accepted a
+   packet-mode command once and never again.
+
+A power cycle puts every override back to `def`, so a fan left in a broken mode
+cannot survive a reboot.
+
+### 8.1 What actually differs between the two paths
+
+| | bit-bang (async) | packet engine |
+|---|---|---|
+| symbol timing | `Timer::after_micros` per edge, scheduler jitter of tens of us | 10 kbaud from the crystal, 100.07 us per unit |
+| before the first bit | GDO0 held low for 2 ms with the PA already up | starts right after the TX ramp (tens of us) |
+| repeats | 8 frames, 12 ms gap | 9 frames (`REPEATS + 1`: the first `STX` after the switch never goes out), ~40 ms wait + 12 ms gap |
+| framing | none | none (`SYNC_MODE=0`), but the chip's own PA ramp and FIFO timing shape the burst |
+
+The timing is the *better* one in packet mode, and `lr-r` still refuses it - so
+timing accuracy is not the variable. The strongest remaining explanation is the
+second row: `lr-r`'s receiver may need a quiet period (or a first "wake" pulse)
+before the code, and the packet path cannot produce one - the OOK framing this
+protocol uses has no preamble, and `SYNC_MODE` has nothing to hang one on.
+
+If that is the cause, packet mode is simply not available for that receiver, and
+the honest answer is the per-fan profile (#18) rather than a fix: keep the
+bit-bang path for the picky fan and use the packet engine where it works.
+
+### 8.2 Recording the result
+
+The console prints one line per transmission:
+
+```
+tx 0x191D07 via packet took 39 ms
+tx 0x191D07 via bit-bang took 0 ms
+```
+
+so the mode is visible next to every command, and `rx` lines from our own burst
+(inside the self-reception window) now carry the level we arrived at, which is
+the only measurement of our own transmit power the device can make.

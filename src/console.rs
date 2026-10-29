@@ -389,6 +389,18 @@ impl Console<'_> {
     }
 }
 
+/// Render a per-slot transmit-mode override for `txmode`.
+fn mode_name(slot: usize) -> &'static str {
+    match crate::state::TX_MODE_SLOT
+        .get(slot)
+        .map(|m| m.load(Ordering::Relaxed))
+    {
+        Some(1) => "pkt",
+        Some(2) => "asy",
+        _ => "def",
+    }
+}
+
 pub fn handle_command(c: &mut Console<'_>, line: &str) {
     // while a config is being pasted every line belongs to it
     if c.staging.active {
@@ -491,7 +503,7 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
                         code_for(&snap.slots[a], btn)
                     });
                     if code != 0 {
-                        tx_push(code);
+                        tx_push_for(a, code);
                         mark_fan_mode(a);
                         c.outln("queued");
                     } else {
@@ -528,7 +540,7 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
                         code_for(&snap.slots[a], dir_button(dir).unwrap())
                     });
                     if code != 0 {
-                        tx_push(code);
+                        tx_push_for(a, code);
                         mark_direction(a);
                         c.outln("queued");
                     } else {
@@ -571,7 +583,7 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
                     code_for(&snap.slots[a], btn)
                 });
                 if code != 0 {
-                    tx_push(code);
+                    tx_push_for(a, code);
                     mark_fan_mode(a);
                     c.outln("queued");
                 } else {
@@ -787,22 +799,76 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
             }
             _ => c.outln("usage: gap <ms>"),
         },
-        "txmode" => match it.next() {
-            Some("packet") => {
-                TX_PACKET.store(true, Ordering::Relaxed);
-                c.outln("tx mode: packet (radio sends the expanded bitstream)");
+        "txmode" => {
+            // `txmode packet|async` sets the default; `txmode <slot> <mode>`
+            // overrides one fan, which is how the packet-mode question is
+            // answered one receiver at a time without touching the others
+            // (backlog #5).
+            fn mode_of(name: &str) -> Option<u8> {
+                match name {
+                    "packet" => Some(1),
+                    "async" => Some(2),
+                    _ => None,
+                }
             }
-            Some("async") => {
-                TX_PACKET.store(false, Ordering::Relaxed);
-                c.outln("tx mode: async (firmware drives GDO0 per edge)");
+            let first = it.next();
+            let second = it.next();
+            match (first, second) {
+                (Some(slot), Some(mode)) => match (slot.parse::<usize>(), mode_of(mode)) {
+                    (Ok(a), Some(m)) if a < 8 => {
+                        set_tx_mode_slot(a, m);
+                        c.outln(if m == 1 {
+                            "slot set to packet (this boot only)"
+                        } else {
+                            "slot set to async (this boot only)"
+                        });
+                    }
+                    _ => c.outln("usage: txmode [<slot>] [packet|async]"),
+                },
+                (Some(mode), None) => match mode_of(mode) {
+                    Some(1) => {
+                        TX_PACKET.store(true, Ordering::Relaxed);
+                        c.outln("tx mode: packet (radio sends the expanded bitstream)");
+                    }
+                    Some(_) => {
+                        TX_PACKET.store(false, Ordering::Relaxed);
+                        c.outln("tx mode: async (firmware drives GDO0 per edge)");
+                    }
+                    None => c.outln("usage: txmode [<slot>] [packet|async]"),
+                },
+                _ => {
+                    c.outln(if TX_PACKET.load(Ordering::Relaxed) {
+                        "tx mode: packet (radio sends the expanded bitstream)"
+                    } else {
+                        "tx mode: async (firmware drives GDO0 per edge)"
+                    });
+                    let mut b = [0u8; 96];
+                    let pos = {
+                        let mut w = Writer96 {
+                            buf: &mut b,
+                            pos: 0,
+                        };
+                        let _ = core::fmt::Write::write_fmt(
+                            &mut w,
+                            format_args!(
+                                "overrides: 0={} 1={} 2={} 3={} 4={} 5={} 6={} 7={} (0 = follow default)",
+                                mode_name(0),
+                                mode_name(1),
+                                mode_name(2),
+                                mode_name(3),
+                                mode_name(4),
+                                mode_name(5),
+                                mode_name(6),
+                                mode_name(7),
+                            ),
+                        );
+                        w.pos
+                    };
+                    let t = core::str::from_utf8(&b[..pos]).unwrap_or("");
+                    c.outln(t);
+                }
             }
-            None => c.outln(if TX_PACKET.load(Ordering::Relaxed) {
-                "tx mode: packet (radio sends the expanded bitstream)"
-            } else {
-                "tx mode: async (firmware drives GDO0 per edge)"
-            }),
-            Some(_) => c.outln("usage: txmode [packet|async]"),
-        },
+        }
         "cfg" => match it.next() {
             Some("dump") => c.cfg_dump(),
             Some("load") => {

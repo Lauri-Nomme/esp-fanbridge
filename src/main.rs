@@ -83,6 +83,10 @@ fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
 use esp_fanbridge_protocol::FRAME_GAP_US;
 use esp_fanbridge_protocol::MAX_SEG;
 use esp_fanbridge_protocol::NOISE_US;
+
+/// How often the RSSI register is sampled while a frame is being captured. The
+/// shortest pulse in the protocol is 400 us, so 300 us cannot miss a symbol.
+const RSSI_SAMPLE_US: u64 = 300;
 use esp_fanbridge_protocol::Seg;
 use esp_fanbridge_protocol::decode_frame;
 
@@ -202,6 +206,10 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
     let mut linebuf = [0u8; 80];
     let mut clock_on = false;
     let mut raw_prev = gdo0.is_high();
+    // strongest RSSI seen during the frame being captured (i8: signed, -128..127,
+    // and dBm = raw/2 - 74, so *higher* means stronger)
+    let mut rssi_peak: i8 = i8::MIN;
+    let mut rssi_sampled_us: u64 = 0;
 
     loop {
         // ---- hand buffered log lines to the console (drops when nobody reads)
@@ -315,11 +323,14 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
         // ---- pending transmit
         if let Some(req) = tx_pop() {
             let code = req & 0x00FF_FFFF;
+            // resolved per slot when the code was queued, so one fan can be on
+            // the packet engine while the others stay on the bit-bang path
+            let packet = req & TX_FLAG_PACKET != 0;
             TX_COUNT.fetch_add(1, Ordering::Relaxed);
             // the receiver is on the same board as the transmitter: ignore what
             // it hears of our own burst (and its echoes) for a moment
             IGNORE_RX_UNTIL_MS.store(now_ms.saturating_add(900) as u32, Ordering::Relaxed);
-            let took = if TX_PACKET.load(Ordering::Relaxed) {
+            let took = if packet {
                 send_code_packet(&mut spi, &mut cs, code).await
             } else {
                 send_code(&mut spi, &mut cs, &mut gdo0, code).await;
@@ -336,11 +347,7 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
                         &mut w,
                         format_args!(
                             "tx 0x{code:06X} via {} took {took} ms",
-                            if TX_PACKET.load(Ordering::Relaxed) {
-                                "packet"
-                            } else {
-                                "bit-bang"
-                            }
+                            if packet { "packet" } else { "bit-bang" }
                         ),
                     );
                     w.pos
@@ -425,6 +432,25 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
             }
         }
 
+        // ---- RSSI of the frame currently on the air
+        //
+        // Reading the register once the frame has ended (which is what `rx`
+        // used to do) returns the noise floor: the AGC has decayed by then
+        // (AGCCTRL2=0x03). Sample while the frame is in progress and keep the
+        // strongest value. Each read costs ~15 us, which can delay the *capture*
+        // of an edge by that much - it does not lose one (edges are >=250 us
+        // apart) and the decoder's windows (250..650, 850..1800 us) absorb it.
+        if n > 0 {
+            let now_us = t0.elapsed().as_micros();
+            if now_us.saturating_sub(rssi_sampled_us) >= RSSI_SAMPLE_US {
+                rssi_sampled_us = now_us;
+                let level = rstat(&mut spi, &mut cs, 0x34) as i8;
+                if level > rssi_peak {
+                    rssi_peak = level;
+                }
+            }
+        }
+
         // ---- RF receive / decode
         let raw = gdo0.is_high();
         if raw != raw_prev {
@@ -434,6 +460,11 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
         if raw != logical {
             let dt = seg_start.elapsed().as_micros() as u32;
             if dt >= NOISE_US {
+                if n == 0 {
+                    // a new frame: forget the previous one's level
+                    rssi_peak = i8::MIN;
+                    rssi_sampled_us = 0;
+                }
                 if n < MAX_SEG {
                     segs[n] = Seg { dt, high: logical };
                     n += 1;
@@ -454,7 +485,16 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
                         pos: 0,
                     };
                     let total: u32 = segs[..n].iter().map(|x| x.dt).sum();
-                    let _ = write!(w, "junk: n={n} total={total}us first={}us", segs[0].dt);
+                    let level = if rssi_peak > i8::MIN {
+                        rssi_dbm(rssi_peak as u8)
+                    } else {
+                        0
+                    };
+                    let _ = write!(
+                        w,
+                        "junk: n={n} total={total}us first={}us rssi={level}dBm",
+                        segs[0].dt
+                    );
                 }
                 let t = core::str::from_utf8(&b).unwrap_or("");
                 console.outln(t);
@@ -464,7 +504,18 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
                 if now < u64::from(IGNORE_RX_UNTIL_MS.load(Ordering::Relaxed)) {
                     // our own transmission: log it once, but do not let it touch
                     // the state (see IGNORE_RX_UNTIL_MS)
-                    console.outln(fmt_rx(&mut linebuf, bits >> 4, (bits & 0xF) as u8, bits, 0));
+                    let own = if rssi_peak > i8::MIN {
+                        rssi_dbm(rssi_peak as u8)
+                    } else {
+                        0
+                    };
+                    console.outln(fmt_rx(
+                        &mut linebuf,
+                        bits >> 4,
+                        (bits & 0xF) as u8,
+                        bits,
+                        own,
+                    ));
                     continue;
                 }
                 if last_code != Some(bits) || now.saturating_sub(last_ms) > 800 {
@@ -473,7 +524,13 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
                     // the level the remote arrived at: the first thing to look
                     // at when presses start going missing
                     RX_COUNT.fetch_add(1, Ordering::Relaxed);
-                    let rssi = rssi_dbm(rstat(&mut spi, &mut cs, 0x34));
+                    let rssi = if rssi_peak > i8::MIN {
+                        rssi_dbm(rssi_peak as u8)
+                    } else {
+                        // no sample landed inside the frame (very short burst):
+                        // fall back to the register, which is better than nothing
+                        rssi_dbm(rstat(&mut spi, &mut cs, 0x34))
+                    };
                     console.outln(fmt_rx(&mut linebuf, addr, button, bits, rssi));
                     match on_frame(addr, button, now) {
                         Ev::Paired(a, i) => {
