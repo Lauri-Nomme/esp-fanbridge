@@ -228,6 +228,18 @@ seconds later - the parent was queueing for a sleepy child, because the device
 had only ever *resumed* since it gained `rxOnWhenIdle`. After `rejoin`, writes
 were answered one-for-one in under a second.
 
+### 55. See the dropped-command counter from Home Assistant — **done**
+
+The queue's drop count was console-only, i.e. invisible in normal operation - the
+one silent failure this device has was only visible to someone with a serial
+cable attached. It is now `txDropped` (0x0005) on the `espPairing` cluster, carried
+by the same report as `rxRearmCount`, and exposed as the diagnostic sensor
+`tx_dropped`, which should sit at 0 forever.
+
+Verified on hardware: a twelve-write burst produced `txDropped: 3` in the
+spontaneous report and `sensor.0x9c139efffecb054c_tx_dropped = 3` in Home
+Assistant.
+
 ### 54. Commands were dropped between the ZCL reply and the air — **fixed**
 
 Symptom: the noon schedule set three fans to 100% with directions in/out/in. The

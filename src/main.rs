@@ -270,12 +270,15 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
             // `exposed` only changes after a reboot, but the pairing status is
             // what tells the user a restart is pending
             let rearms = u32::from(REARM_COUNT.load(Ordering::Relaxed) as u16);
+            let dropped = tx_dropped();
             if STAGE_NOW.load(Ordering::Relaxed) != raw
                 || PAIRED_NOW.load(Ordering::Relaxed) != count
                 || EXPOSED_NOW.load(Ordering::Relaxed) != exposed
                 || REARMS_NOW.load(Ordering::Relaxed) != rearms
+                || TXDROPPED_NOW.load(Ordering::Relaxed) != dropped
             {
                 REARMS_NOW.store(rearms, Ordering::Relaxed);
+                TXDROPPED_NOW.store(dropped, Ordering::Relaxed);
                 STAGE_NOW.store(raw, Ordering::Relaxed);
                 PAIRED_NOW.store(count, Ordering::Relaxed);
                 EXPOSED_NOW.store(exposed, Ordering::Relaxed);

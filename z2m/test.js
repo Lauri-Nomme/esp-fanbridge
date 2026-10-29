@@ -135,6 +135,15 @@ const directionConvert = (data, ID) =>
         });
     });
 
+    await test('the pairing payload carries the dropped-command counter', async () => {
+        const convert = fromZigbee('espPairing').convert;
+        assert.deepEqual(convert(definition, {data: {txDropped: 3}}), {tx_dropped: 3});
+        // 0 must survive: "no drops" is the healthy value, not a missing one
+        assert.deepEqual(convert(definition, {data: {txDropped: 0}}), {tx_dropped: 0});
+        // a report that carries neither count must not invent restart_required
+        assert.deepEqual(convert(definition, {data: {txDropped: 7}}), {tx_dropped: 7});
+    });
+
     await test('a report with no known attribute produces nothing', async () => {
         assert.equal(fanModeConvert({}, 2), undefined);
     });

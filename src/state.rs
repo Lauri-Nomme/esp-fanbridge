@@ -235,6 +235,8 @@ pub static PAIRED_NOW: AtomicU32 = AtomicU32::new(0);
 pub static EXPOSED_NOW: AtomicU32 = AtomicU32::new(0);
 /// Receiver re-arm count last reported.
 pub static REARMS_NOW: AtomicU32 = AtomicU32::new(0);
+/// Dropped-command count last reported (see backlog #54).
+pub static TXDROPPED_NOW: AtomicU32 = AtomicU32::new(0);
 /// Counters for the `status` command.
 pub static TX_COUNT: AtomicU32 = AtomicU32::new(0);
 /// Dropped-command count last printed on the console (so a full queue is

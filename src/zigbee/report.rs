@@ -19,6 +19,7 @@ use crate::pairing::Direction;
 use crate::pairing::Stage;
 use crate::state::REARM_COUNT;
 use crate::state::STATE;
+use crate::state::tx_dropped;
 use crate::zigbee::EP_FAN0;
 use crate::zigbee::EP_MASTER;
 use crate::zigbee::ZbStack;
@@ -161,13 +162,17 @@ pub async fn send_pairing_report(stack: &ZbStack) -> Result<(), ReportError> {
         (st.paired_count(), st.exposed_count())
     });
     let rearms = REARM_COUNT.load(Ordering::Relaxed) as u16;
-    let mut buf = [0u8; 32];
+    let dropped = tx_dropped() as u16;
+    let mut buf = [0u8; 40];
     let Ok(report) = AttributeReportBuilder::new(&mut buf, seq)
         .and_then(|b| b.push(&A_STAGE, stage))
         .and_then(|b| b.push(&A_PAIRED_COUNT, Uint8(count)))
         .and_then(|b| b.push(&A_EXPOSED_COUNT, Uint8(exposed)))
         .and_then(|b| b.push(&A_RESTART_REQUIRED, count != exposed))
         .and_then(|b| b.push(&A_RX_REARM_COUNT, Uint16(rearms)))
+        // the only silent failure this device has: a command that never reached
+        // the fan. Reported so Home Assistant shows it without a console.
+        .and_then(|b| b.push(&A_TX_DROPPED, Uint16(dropped)))
         .and_then(AttributeReportBuilder::finish)
     else {
         return Err(ReportError::Build);

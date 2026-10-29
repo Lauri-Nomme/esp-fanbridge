@@ -45,6 +45,7 @@ use crate::state::mark_direction;
 use crate::state::mark_fan_mode;
 use crate::state::mark_pairing_switch;
 use crate::state::request_reboot_in;
+use crate::state::tx_dropped;
 use crate::state::tx_push;
 use crate::state::zb_event;
 use crate::zigbee::EP_FAN0;
@@ -77,16 +78,23 @@ pub const A_RESTART_REQUIRED: Attribute<Bool, ReadOnly, Reportable> =
 /// How often the receiver watchdog had to re-arm the radio (see `status`).
 pub const A_RX_REARM_COUNT: Attribute<Uint16, ReadOnly, Reportable> =
     CL_PAIRING.attribute(AttributeId(0x0004), "rxRearmCount");
+/// Commands the transmit queue had to throw away because it was full (backlog
+/// #54). Non-zero means a command never reached the fan, and the fan's state is
+/// not what the device says it is - the only silent failure this device has, so
+/// it is the one number worth watching from Home Assistant.
+pub const A_TX_DROPPED: Attribute<Uint16, ReadOnly, Reportable> =
+    CL_PAIRING.attribute(AttributeId(0x0005), "txDropped");
 pub static ONOFF_ATTRS: [AttrInfo; 1] = [A_ONOFF.attr_info()];
 /// Shared reporting store: enough to accept Configure Reporting from the coordinator.
 pub static REPORTING: ReportingTable<16> = ReportingTable::new();
 pub static FAN_ATTRS: [AttrInfo; 2] = [A_FANMODE.attr_info(), A_FAN_MODE_SEQ.attr_info()];
-pub static PAIRING_ATTRS: [AttrInfo; 5] = [
+pub static PAIRING_ATTRS: [AttrInfo; 6] = [
     A_STAGE.attr_info(),
     A_PAIRED_COUNT.attr_info(),
     A_EXPOSED_COUNT.attr_info(),
     A_RESTART_REQUIRED.attr_info(),
     A_RX_REARM_COUNT.attr_info(),
+    A_TX_DROPPED.attr_info(),
 ];
 pub static DIRECTION_ATTRS: [AttrInfo; 1] = [A_DIRECTION.attr_info()];
 
@@ -392,6 +400,7 @@ impl ClusterServer for PairingEp {
                 out,
                 offset,
             ),
+            0x0005 => A_TX_DROPPED.encode(Uint16(tx_dropped() as u16), out, offset),
             _ => return Status::UnsupportedAttribute,
         })
     }
