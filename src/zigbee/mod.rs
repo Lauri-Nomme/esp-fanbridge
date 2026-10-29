@@ -19,7 +19,6 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_time::Delay as AsyncDelay;
 use embassy_time::Duration;
 use embassy_time::Timer;
-use esp_println::println;
 use zigbee::CurrentPowerMode;
 use zigbee::CurrentPowerSourceLevel;
 use zigbee::DeviceConfig;
@@ -304,7 +303,7 @@ pub async fn report_task(stack: &'static ZbStack) {
                 }
                 Err(e) => {
                     REPORT_FAIL.fetch_add(1, Ordering::Relaxed);
-                    println!("rep fail: {} (pairing)", e.name());
+                    log::warn!("rep fail: {} (pairing)", e.name());
                 }
             }
         } else {
@@ -320,7 +319,7 @@ pub async fn report_task(stack: &'static ZbStack) {
                     }
                     Err(e) => {
                         REPORT_FAIL.fetch_add(1, Ordering::Relaxed);
-                        println!("rep fail: {} (bit {bit})", e.name());
+                        log::warn!("rep fail: {} (bit {bit})", e.name());
                     }
                 }
             }
@@ -351,8 +350,8 @@ pub async fn announce_task(stack: &'static ZbStack) {
     mark_all_state();
     for _ in 0..3 {
         match stack.device().announce_self().await {
-            Ok(()) => println!("zigbee: announced"),
-            Err(e) => println!("zigbee: announce failed: {e:?}"),
+            Ok(()) => log::info!("zigbee: announced"),
+            Err(e) => log::warn!("zigbee: announce failed: {e:?}"),
         }
         Timer::after_millis(400).await;
     }
@@ -369,7 +368,7 @@ pub async fn stack_task(stack: &'static ZbStack) {
     let mut backoff_s = 5u64;
     loop {
         let outcome = stack.run(AsyncDelay).await;
-        println!(
+        log::warn!(
             "zigbee stack stopped: {outcome:?} - retrying in {backoff_s}s (open permit-join if it says NotPermitted)"
         );
         Timer::after(Duration::from_secs(backoff_s)).await;
