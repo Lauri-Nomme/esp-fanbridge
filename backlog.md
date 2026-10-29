@@ -261,6 +261,32 @@ ring exists, and the whole banner is ~200 bytes - less than the FIFO plus the
 USB endpoint buffers, which is why a reset with a host attached but never reading
 still boots and answers (measured: 843 ms for a ZCL read).
 
+### 59. An occasional burst is simply not obeyed — **open, measured**
+
+On 2026-10-30 a single async `speed 4` command to `lr-r` was transmitted
+(`tx 0x191D07`, device state updated, `tx_dropped` 0) and the fan did not move.
+Three more identical commands five seconds apart and it went to 100 % - so at
+least one landed and the first did not.
+
+That is a different failure from #54: the queue delivered the command to the
+radio, the radio sent 8 frames, and the receiver ignored all of them. Nothing in
+the firmware can see it, which is why `tx_dropped` alone is not evidence that the
+fan obeyed.
+
+Not yet measured: the rate. Candidates:
+
+* the link is marginal at that spot (the fan is across the flat; the remotes' `rx`
+  RSSI is only a proxy, since the fan never transmits),
+* the receiver needs a longer gap between bursts than 12 ms, or more frames per
+  burst (`repeats`, console knob, 8 by default),
+* the burst shape: our frames measure ~2 % shorter than the remote's 415/1199 us,
+  which a picky decoder might not tolerate.
+
+Next is a counted experiment, not a fix: N = 10 single commands per mode, each
+from the same known state (25 %), with a human confirming each step. A rate beats
+an anecdote, and only then is "send each command twice" or "more repeats"
+justified rather than guessed.
+
 ### 58. Per-slot transmit mode — **done**
 
 `txmode` was global: trying the packet engine on one fan put *every* command on
