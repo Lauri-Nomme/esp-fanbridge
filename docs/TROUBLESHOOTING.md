@@ -99,10 +99,10 @@ The device says `sent` and the fan does nothing. In order of likelihood:
    the RF frame goes out (~400 ms per command), so a "success" only says the
    command was accepted. `debug on` prints one `tx 0x...` line per frame: if a
    `zb: slot ...` line appears and no `tx` line follows it, the command died
-   between the reply and the air. `status` shows `txq <waiting>/<dropped>` -
-   anything in the second number is a command that was thrown away because the
-   queue was full (backlog #54). This was the noon-schedule bug: three fans, six
-   writes, two frames.
+   between the reply and the air. `status` shows `txq <waiting>/<dropped>`, and
+   the same number is the `tx_dropped` sensor in Home Assistant - anything above
+   zero is a command that was thrown away because the queue was full (backlog
+   #54). This was the noon-schedule bug: three fans, six writes, two frames.
 2. **Wrong remote for that fan.** Slot 0 is whatever you paired first; `list`
    prints the address and name. A slot is one physical remote, not one fan.
 3. **Transmit mode.** `txmode` shows `async` or `packet`. Async drives

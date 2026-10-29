@@ -40,6 +40,7 @@ const PAIRING_CLUSTER = {
         exposedCount: {name: 'exposedCount', ID: 0x0002, type: 0x20, write: false},
         restartRequired: {name: 'restartRequired', ID: 0x0003, type: 0x10, write: false},
         rxRearmCount: {name: 'rxRearmCount', ID: 0x0004, type: 0x21, write: false},
+        txDropped: {name: 'txDropped', ID: 0x0005, type: 0x21, write: false},
     },
     commands: {
         // apply a pending endpoint-set change and restart (0x00)
@@ -163,6 +164,11 @@ module.exports = {
             new exposes.Numeric('rx_rearm_count', ea.STATE)
                 .withDescription('How often the receiver watchdog had to re-arm the radio')
                 .withCategory('diagnostic'),
+            // The device answers a ZCL write before the 433 MHz frame goes out,
+            // so this is the only signal that a command never reached the fan.
+            new exposes.Numeric('tx_dropped', ea.STATE)
+                .withDescription('Commands dropped because the transmit queue was full (should stay 0)')
+                .withCategory('diagnostic'),
             new exposes.Binary('restart_required', ea.STATE, true, false)
                 .withDescription('Pairing changed since boot; restart (or re-interview) to expose it')
                 .withLabel('Restart required'),
@@ -229,6 +235,7 @@ module.exports = {
                 if (msg.data.pairedCount !== undefined) result.paired_count = msg.data.pairedCount;
                 if (msg.data.exposedCount !== undefined) result.exposed_count = msg.data.exposedCount;
                 if (msg.data.rxRearmCount !== undefined) result.rx_rearm_count = msg.data.rxRearmCount;
+                if (msg.data.txDropped !== undefined) result.tx_dropped = msg.data.txDropped;
                 // derive it from the two counts when both are present: a boolean
                 // survives Zigbee2MQTT's state cache either way
                 if (result.paired_count !== undefined && result.exposed_count !== undefined) {
@@ -309,7 +316,7 @@ module.exports = {
         // needed; ask for the pairing stage so the value starts out known.
         const endpoint = device.endpoints.find((e) => e.supportsInputCluster('espPairing'));
         if (endpoint) {
-            await endpoint.read('espPairing', ['stage', 'pairedCount', 'exposedCount', 'restartRequired', 'rxRearmCount']).catch(() => {});
+            await endpoint.read('espPairing', ['stage', 'pairedCount', 'exposedCount', 'restartRequired', 'rxRearmCount', 'txDropped']).catch(() => {});
         }
     },
 };
