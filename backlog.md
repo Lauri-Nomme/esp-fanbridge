@@ -105,9 +105,16 @@ Notes from the investigation:
   so everything after it was off-tune until a reboot. If a sweep is ever wanted
   again, `SCAL` is mandatory (and the command was removed for this reason).
 
-Next steps: compare at matched signal level, then try biasing the bit period to
-match the remote's numbers, or try `PKTCTRL0`/`PKTCTRL1` variants that change
-the preamble handling.
+**The experiment is now one command per fan** (backlog #58): `txmode <slot>
+packet|async` overrides the transmit mode for one slot, this boot only, so `lr-r`
+can be tried in packet mode while the other two keep the bit-bang path that works
+for them. Before that, the mode was global and every packet-mode test silently
+broke the fans that had been working.
+
+What is left is the part that needs ears and a matched signal level: see
+`docs/PACKET-TX.md` §8 for the procedure and the hypothesis (a receiver that
+needs a leading quiet period would explain `lr-r` exactly, and the OOK framing
+here has no preamble to give it one).
 
 ---
 
@@ -242,6 +249,16 @@ boot banner and the panic handler still use `println!`: both run once, before th
 ring exists, and the whole banner is ~200 bytes - less than the FIFO plus the
 USB endpoint buffers, which is why a reset with a host attached but never reading
 still boots and answers (measured: 843 ms for a ZCL read).
+
+### 58. Per-slot transmit mode — **done**
+
+`txmode` was global: trying the packet engine on one fan put *every* command on
+it, so a test that half-worked also broke the fans that had been fine. The mode
+is now resolved per slot when the code is queued (`txmode <slot> packet|async`,
+this boot only), so the experiment is one fan, one mode, one command.
+
+The flag rides in the queued word (bit 31), which the queue already had room for;
+nothing about the default changed - `txmode` still selects the bit-bang path.
 
 ### 55. See the dropped-command counter from Home Assistant — **done**
 
@@ -552,11 +569,19 @@ decode range/noise on the listener and the real remotes.
 Also confirmed from the datasheet: `MDMCFG2.MOD_FORMAT` `011` = ASK/OOK and
 `010` is *reserved* (not OOK) — which is exactly the packet-mode bug we hit.
 
-### 16. Log RSSI per received frame — **S**
+### 16. Log RSSI per received frame — **done, then fixed**
 
-`rx device=… button=… rssi=-74dBm`. Costs one register read; turns "the remote
-worked 3 of 5 times" into a number and shows whether the fanbridge or the remote
-is the weak side.
+`rx device=… button=… rssi=-74dBm`. The first version read the register once the
+frame had ended - by which time the AGC has decayed (`AGCCTRL2=0x03`), so it
+printed the noise floor for every frame. It now samples the RSSI register every
+300 us while a frame is being captured and reports the **peak**, which is the
+number that answers "how well did that remote arrive". `junk:` lines carry the
+same level, so a burst that fails to decode can be told apart from noise.
+
+The sampling read costs ~15 us and can delay the *capture* of one edge by that
+much; it cannot lose an edge (they are >=250 us apart) and the decoder windows
+(250..650, 850..1800 us) absorb it. Needs one remote press on hardware to confirm
+the values track distance.
 
 ### 17. Calibrate the carrier against a real remote — **M**
 

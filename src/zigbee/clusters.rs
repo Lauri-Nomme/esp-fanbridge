@@ -46,7 +46,7 @@ use crate::state::mark_fan_mode;
 use crate::state::mark_pairing_switch;
 use crate::state::request_reboot_in;
 use crate::state::tx_dropped;
-use crate::state::tx_push;
+use crate::state::tx_push_for;
 use crate::state::zb_event;
 use crate::zigbee::EP_FAN0;
 use crate::zigbee::EP_MASTER;
@@ -226,7 +226,7 @@ impl<const EP: u8, const SLOT: i8, const KIND: u8> OnOffEp<EP, SLOT, KIND> {
                     code_for(sl, btn)
                 });
                 if code != 0 {
-                    tx_push(code);
+                    tx_push_for(SLOT.max(0) as usize, code);
                 }
             }
         }
@@ -364,7 +364,7 @@ impl<const SLOT: usize> FanEp<SLOT> {
             code_for(&snap.slots[SLOT], speed_button(speed).unwrap())
         });
         if code != 0 {
-            tx_push(code);
+            tx_push_for(SLOT, code);
         }
         zb_event(0, SLOT as u8, speed);
         mark_fan_mode(SLOT);
@@ -488,7 +488,7 @@ impl<const SLOT: usize> DirEp<SLOT> {
             code_for(&snap.slots[SLOT], dir_button(dir.as_u8()).unwrap())
         });
         if code != 0 {
-            tx_push(code);
+            tx_push_for(SLOT, code);
         }
         zb_event(2, SLOT as u8, dir.as_u8());
         mark_direction(SLOT);

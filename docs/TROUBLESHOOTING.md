@@ -105,10 +105,11 @@ The device says `sent` and the fan does nothing. In order of likelihood:
    #54). This was the noon-schedule bug: three fans, six writes, two frames.
 2. **Wrong remote for that fan.** Slot 0 is whatever you paired first; `list`
    prints the address and name. A slot is one physical remote, not one fan.
-3. **Transmit mode.** `txmode` shows `async` or `packet`. Async drives
-   `GDO0` from the firmware and is the proven path. Packet mode is faster and
-   cleaner but one fan (`lr-r`) has never accepted it - if that fan is the silent
-   one, `txmode async`.
+3. **Transmit mode.** `txmode` shows the default and any per-slot overrides.
+   `async` drives `GDO0` from the firmware and is the proven path; `packet` uses
+   the radio's own engine. One fan (`lr-r`) has never accepted packet mode, so
+   if that is the silent one: `txmode <slot> async` (or `txmode async` for all).
+   An override lasts until the next boot.
 4. **Repeats and gap.** `repeats` shows frames per command and the gap between
    them; a receiver needs a couple of frames to wake up. 8 frames / 12 ms is the
    default and what the remotes do.
