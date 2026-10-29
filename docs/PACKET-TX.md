@@ -403,7 +403,35 @@ If that is the cause, packet mode is simply not available for that receiver, and
 the honest answer is the per-fan profile (#18) rather than a fix: keep the
 bit-bang path for the picky fan and use the packet engine where it works.
 
-### 8.2 Recording the result
+### 8.2 Result (2026-10-30): `lr-r` refuses the packet engine, `lr-l` accepts it
+
+Run with the per-slot switch, same command (`speed <slot> 4`), same radio, same
+repeat count:
+
+| slot | fan | mode | console | fan obeyed |
+|---|---|---|---|---|
+| 0 | `lr-r` | bit-bang | `tx 0x191D02 via bit-bang` | yes (control, 2/2) |
+| 0 | `lr-r` | packet | `tx 0x191D07 via packet took 480 ms` | **no (0/2)** |
+| 1 | `lr-l` | packet | `tx 0x068007 via packet took 480 ms` | **yes (1/1)** |
+
+Three independent `lr-r` packet attempts across two builds, zero reactions, while
+the bit-bang path works every time and `lr-l` accepts the identical packet frame.
+
+So the firmware, the per-slot flag and the radio are not the problem: that
+receiver does not accept the packet engine's waveform. Timing accuracy is
+excluded as the variable (packet mode is the *more* accurate of the two), which
+leaves the burst envelope - most plausibly the first symbol, where the packet
+path has the PA ramping during the first 400 us pulse while the bit-bang path
+holds the PA up for 2 ms first. Every packet frame starts cold; every bit-bang
+frame starts with the PA already on.
+
+Confirming that would need an RF measurement of the first pulse at the receiver,
+and it would change nothing: packet mode offers no measured benefit over the
+proven path, so the answer is **keep `async`** and do not build the per-fan
+profile (#18) for its own sake. The switch stays because it is how this question
+gets re-asked cheaply if a receiver is ever replaced.
+
+### 8.3 Recording the result
 
 The console prints one line per transmission:
 
