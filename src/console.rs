@@ -25,10 +25,13 @@ use zigbee_cluster_library::types::AttributeId;
 /// hex digits, so the buffer has to be wider than the classic terminal line.
 pub const LINE_LEN: usize = 96;
 
-/// Staging for console output the 64-byte USB FIFO cannot take yet. It only has
-/// to hold one long line (`status` with big counters, or a `slots` entry), not a
-/// whole `help`.
-pub const OUT_LEN: usize = 192;
+/// Staging for console output the 64-byte USB FIFO cannot take yet.
+///
+/// Sized for the largest burst the console produces, not for one line: `help` is
+/// ~1.8 KB and the firmware fills it in ~100 us, while USB needs ~1.5 ms to send
+/// it. At 192 bytes that ran out mid-line and `help` came out in fragments with
+/// chunks missing - which looks like a broken terminal and is not one.
+pub const OUT_LEN: usize = 2048;
 
 /// Staging area for `cfg load`, which is pasted in as several lines.
 struct CfgStage {
@@ -595,7 +598,7 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
             if let Some(h) = it.next() {
                 let h = h.trim_start_matches("0x");
                 if let Ok(v) = u32::from_str_radix(h, 16) {
-                    tx_push(v & 0x00FF_FFFF);
+                    tx_push_default(v & 0x00FF_FFFF);
                     c.outln("queued raw");
                 }
             }
@@ -808,6 +811,8 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
                 match name {
                     "packet" => Some(1),
                     "async" => Some(2),
+                    // clear an override and follow the default again
+                    "def" | "default" | "auto" => Some(0),
                     _ => None,
                 }
             }
@@ -817,10 +822,10 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
                 (Some(slot), Some(mode)) => match (slot.parse::<usize>(), mode_of(mode)) {
                     (Ok(a), Some(m)) if a < 8 => {
                         set_tx_mode_slot(a, m);
-                        c.outln(if m == 1 {
-                            "slot set to packet (this boot only)"
-                        } else {
-                            "slot set to async (this boot only)"
+                        c.outln(match m {
+                            1 => "slot set to packet (this boot only)",
+                            2 => "slot set to async (this boot only)",
+                            _ => "slot follows the default again",
                         });
                     }
                     _ => c.outln("usage: txmode [<slot>] [packet|async]"),
