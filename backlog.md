@@ -228,6 +228,21 @@ seconds later - the parent was queueing for a sleepy child, because the device
 had only ever *resumed* since it gained `rxOnWhenIdle`. After `rejoin`, writes
 were answered one-for-one in under a second.
 
+### 56. The stack still printed straight into the USB FIFO — **fixed**
+
+#52 moved the stack's `log` output into the ring, but `src/zigbee/mod.rs` kept
+five `println!` calls: the report failures, the announce results and the
+"stack stopped" line. `println!` writes into the USB FIFO directly, so those were
+the last lines that could (a) block the stack task in the #51 way and (b) land in
+the middle of a console line - observed as `zb: slot 2 "brrep fail: NoAck`, which
+looks like a corrupt frame and is not.
+
+All five now go through `log` (`warn`/`info`) and therefore the ring. Only the
+boot banner and the panic handler still use `println!`: both run once, before the
+ring exists, and the whole banner is ~200 bytes - less than the FIFO plus the
+USB endpoint buffers, which is why a reset with a host attached but never reading
+still boots and answers (measured: 843 ms for a ZCL read).
+
 ### 55. See the dropped-command counter from Home Assistant — **done**
 
 The queue's drop count was console-only, i.e. invisible in normal operation - the
