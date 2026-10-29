@@ -289,9 +289,28 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
             console.outln(text);
         }
 
+        // ---- commands dropped because the queue overflowed: say so once
+        let dropped = tx_dropped();
+        if dropped != TX_DROPPED_NOW.load(Ordering::Relaxed) {
+            TX_DROPPED_NOW.store(dropped, Ordering::Relaxed);
+            let mut b = [0u8; 80];
+            let pos = {
+                let mut w = Writer80 {
+                    buf: &mut b,
+                    pos: 0,
+                };
+                let _ = core::fmt::Write::write_fmt(
+                    &mut w,
+                    format_args!("tx queue full: {dropped} command(s) dropped"),
+                );
+                w.pos
+            };
+            let t = core::str::from_utf8(&b[..pos]).unwrap_or("");
+            console.outln(t);
+        }
+
         // ---- pending transmit
-        let req = TX_REQ.swap(0, Ordering::Relaxed);
-        if req != 0 {
+        if let Some(req) = tx_pop() {
             let code = req & 0x00FF_FFFF;
             TX_COUNT.fetch_add(1, Ordering::Relaxed);
             // the receiver is on the same board as the transmitter: ignore what

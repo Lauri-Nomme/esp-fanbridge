@@ -95,21 +95,29 @@ goes `waiting_speed_1` → `_2` → `_3` → `_4` → `paired`.
 
 The device says `sent` and the fan does nothing. In order of likelihood:
 
-1. **Wrong remote for that fan.** Slot 0 is whatever you paired first; `list`
+1. **The command was never transmitted.** The device answers the ZCL write before
+   the RF frame goes out (~400 ms per command), so a "success" only says the
+   command was accepted. `debug on` prints one `tx 0x...` line per frame: if a
+   `zb: slot ...` line appears and no `tx` line follows it, the command died
+   between the reply and the air. `status` shows `txq <waiting>/<dropped>` -
+   anything in the second number is a command that was thrown away because the
+   queue was full (backlog #54). This was the noon-schedule bug: three fans, six
+   writes, two frames.
+2. **Wrong remote for that fan.** Slot 0 is whatever you paired first; `list`
    prints the address and name. A slot is one physical remote, not one fan.
-2. **Transmit mode.** `txmode` shows `async` or `packet`. Async drives
+3. **Transmit mode.** `txmode` shows `async` or `packet`. Async drives
    `GDO0` from the firmware and is the proven path. Packet mode is faster and
    cleaner but one fan (`lr-r`) has never accepted it - if that fan is the silent
    one, `txmode async`.
-3. **Repeats and gap.** `repeats` shows frames per command and the gap between
+4. **Repeats and gap.** `repeats` shows frames per command and the gap between
    them; a receiver needs a couple of frames to wake up. 8 frames / 12 ms is the
    default and what the remotes do.
-4. **Antenna and range.** A fan across the flat is fine with a proper 433 MHz
+5. **Antenna and range.** A fan across the flat is fine with a proper 433 MHz
    antenna; with a 5 cm wire it is not.
-5. **Battery in the remote** - if the *original* remote still works and the
+6. **Battery in the remote** - if the *original* remote still works and the
    bridge does not with the same code on air, the difference is timing or level,
    not the code. See [`docs/PROTOCOL.md`](PROTOCOL.md) for the measured waveform
-   and `docs/PACKET-TX.md` for what packet mode changes.
+   and [`docs/PACKET-TX.md`](PACKET-TX.md) for what packet mode changes.
 
 ## 6. Home Assistant shows the wrong entities
 
