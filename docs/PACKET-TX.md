@@ -431,6 +431,24 @@ proven path, so the answer is **keep `async`** and do not build the per-fan
 profile (#18) for its own sake. The switch stays because it is how this question
 gets re-asked cheaply if a receiver is ever replaced.
 
+### 8.2.1 The repeat run that nearly produced a false conclusion
+
+One async command at 25 % -> 100 % was **also** ignored that night: `speed_2`
+became 4 on the device, `tx_dropped` stayed 0, and the fan did not move. That made
+the mode attribution unsafe, so both paths were re-run as repeat batches six
+seconds apart, same command each time:
+
+| mode | batches | landed |
+|---|---|---|
+| packet | 6 (2 + 4) | **0** - 54 frames |
+| async | 5 | 4 (the fifth was sent while the fan was already at the target) |
+
+Six packet batches and not one reaction confirms the mode difference. But the
+single async failure is a second, independent problem: an occasional burst is
+simply not obeyed. That one matters more, because nothing in the system can see
+it - the device transmits, the queue is healthy, and the fan does not listen.
+Tracked in backlog #59.
+
 ### 8.3 Recording the result
 
 The console prints one line per transmission:
