@@ -316,6 +316,17 @@ pub fn set_tx_mode_slot(slot: usize, mode: u8) {
     }
 }
 
+/// Queue `code` with the global transmit mode (no slot: raw console test codes).
+pub fn tx_push_default(code: u32) {
+    tx_push(
+        code | if TX_PACKET.load(Ordering::Relaxed) {
+            TX_FLAG_PACKET
+        } else {
+            0
+        },
+    );
+}
+
 /// Queue `code` for `slot`, resolving that slot's transmit mode now.
 pub fn tx_push_for(slot: usize, code: u32) {
     tx_push(
