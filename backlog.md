@@ -82,7 +82,7 @@ it, flip `TX_PACKET` to `true` in `src/main.rs` and drop the `txmode` default.
 
 ---
 
-## 5. Packet mode is still ignored by one fan — **M**
+## 5. Packet mode is still ignored by one fan — **answered: no, keep bit-bang**
 
 `lr-r` (`0x191D0`) reacts to **every** bit-banged command and to **none** of the
 packet-mode ones, while `lr-l` (`0x06800`) accepted packet mode at least once.
@@ -111,10 +111,21 @@ can be tried in packet mode while the other two keep the bit-bang path that work
 for them. Before that, the mode was global and every packet-mode test silently
 broke the fans that had been working.
 
-What is left is the part that needs ears and a matched signal level: see
-`docs/PACKET-TX.md` §8 for the procedure and the hypothesis (a receiver that
-needs a leading quiet period would explain `lr-r` exactly, and the OOK framing
-here has no preamble to give it one).
+**Result (2026-10-30), measured with the per-slot switch:** `lr-r` ignored the
+packet frame twice out of two, while `lr-l` obeyed the identical packet frame
+(1/1) and `lr-r` obeyed the bit-bang control both times. Three packet attempts
+across two builds, zero reactions - that receiver rejects the packet engine's
+waveform, and it is not the firmware, the flag or the radio.
+
+Timing accuracy is excluded (packet mode is the more accurate path), so the
+difference is the burst envelope - most plausibly the first symbol, where the
+packet path has the PA ramping through the first 400 us pulse while the bit-bang
+path holds the PA up for 2 ms first. Not worth confirming: packet mode has no
+measured benefit over the proven path.
+
+**Decision: `async` stays the default and #18 is not worth building for its own
+sake.** The per-slot switch (#58) stays because it makes the question cheap to
+re-ask if a receiver is ever replaced. Details: `docs/PACKET-TX.md` §8.2.
 
 ---
 
