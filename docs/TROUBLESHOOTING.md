@@ -186,6 +186,13 @@ enumerated but not reading blocked whatever task was printing - the Zigbee stack
 included. Fixed by dropping output instead of waiting (backlog #51). A build from
 before that fix can be wedged the same way by `ESP_LOG=debug` with no reader.
 
+A build from before backlog #53 also *cuts* lines: the 64-byte FIFO takes the
+first 64 bytes and the rest never leaves, so `status` ends mid-word and a `slots`
+dump loses entries. That is truncation, not corruption - and on a current build
+`status` ends with `out N`, the number of output chunks lost because nobody was
+reading. A healthy console has `out` climbing only at boot, before a reader
+attaches.
+
 ## 9. The device stops accepting commands, but reports still arrive
 
 Symptom: Home Assistant publishes, the state flips back, and the device keeps

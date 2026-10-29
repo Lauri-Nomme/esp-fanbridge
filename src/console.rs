@@ -25,6 +25,11 @@ use zigbee_cluster_library::types::AttributeId;
 /// hex digits, so the buffer has to be wider than the classic terminal line.
 pub const LINE_LEN: usize = 96;
 
+/// Staging for console output the 64-byte USB FIFO cannot take yet. It only has
+/// to hold one long line (`status` with big counters, or a `slots` entry), not a
+/// whole `help`.
+pub const OUT_LEN: usize = 192;
+
 /// Staging area for `cfg load`, which is pasted in as several lines.
 struct CfgStage {
     image: [u8; CFG_BYTES],
@@ -47,6 +52,11 @@ pub struct Console<'d> {
     line: [u8; LINE_LEN],
     n: usize,
     staging: CfgStage,
+    /// Output waiting for room in the USB FIFO (see [`Console::flush`]).
+    out: [u8; OUT_LEN],
+    out_head: usize,
+    out_len: usize,
+    out_lost: u32,
 }
 
 impl<'d> Console<'d> {
@@ -56,6 +66,10 @@ impl<'d> Console<'d> {
             line: [0; LINE_LEN],
             n: 0,
             staging: CfgStage::new(),
+            out: [0; OUT_LEN],
+            out_head: 0,
+            out_len: 0,
+            out_lost: 0,
         }
     }
 
@@ -67,30 +81,69 @@ impl<'d> Console<'d> {
     /// stops reading: a device in a cabinet, or a reader that was attached and
     /// went away, both end up with a full FIFO and a device that looks deaf
     /// while its radio is perfectly fine. Dropping output is the right trade.
-    /// Raw bytes, dropped when the host is not reading (see [`Console::out`]).
+    ///
+    /// What is *not* right is dropping the tail of a line: writing straight into
+    /// the FIFO cut every line longer than 64 bytes, so `status` stopped after
+    /// "async |" and `slots` lost whole entries - diagnostics that looked like
+    /// corrupt output rather than truncated output. Output is staged in a small
+    /// ring instead and [`Console::flush`] pushes it out as the FIFO drains, so
+    /// lines are whole whenever the host is reading at all, and nothing blocks
+    /// when it is not.
     pub fn out_bytes(&mut self, bytes: &[u8]) {
-        for byte in bytes {
-            match self.usb.write_byte_nb(*byte) {
-                Ok(()) => {}
+        self.queue(bytes);
+    }
+
+    pub fn out(&mut self, s: &str) {
+        self.queue(s.as_bytes());
+    }
+
+    /// Stage bytes for the host. When the ring is full, try to empty it first;
+    /// only a host that is not reading at all costs bytes, and those are counted
+    /// (`status` shows the count as `out`).
+    fn queue(&mut self, bytes: &[u8]) {
+        let mut lost = false;
+        for &byte in bytes {
+            if self.out_len == OUT_LEN {
+                self.flush();
+                if self.out_len == OUT_LEN {
+                    lost = true;
+                    continue;
+                }
+            }
+            self.out[(self.out_head + self.out_len) % OUT_LEN] = byte;
+            self.out_len += 1;
+        }
+        if lost {
+            self.out_lost = self.out_lost.saturating_add(1);
+        }
+    }
+
+    /// Move as much staged output as the FIFO accepts right now; never blocks.
+    pub fn flush(&mut self) {
+        while self.out_len > 0 {
+            match self.usb.write_byte_nb(self.out[self.out_head]) {
+                Ok(()) => {
+                    self.out_head = (self.out_head + 1) % OUT_LEN;
+                    self.out_len -= 1;
+                }
                 Err(_) => return,
             }
         }
     }
 
-    pub fn out(&mut self, s: &str) {
-        for byte in s.as_bytes() {
-            match self.usb.write_byte_nb(*byte) {
-                Ok(()) => {}
-                // fifo full: the host is not reading, drop the rest
-                Err(nb::Error::WouldBlock) => return,
-                Err(nb::Error::Other(_)) => return,
-            }
-        }
+    /// Consoles lines the host could not take at all (0 on a healthy link).
+    pub fn out_lost(&self) -> u32 {
+        self.out_lost
     }
 
     pub fn outln(&mut self, s: &str) {
         self.out(s);
         self.out("\r\n");
+        // Push what the FIFO will take after every line. A command like `slots`
+        // prints eight lines back to back, which without this fills the staging
+        // ring faster than USB can drain it - and the line that does not fit is
+        // lost whole instead of being cut in half.
+        self.flush();
     }
 
     pub fn poll(&mut self) -> Option<[u8; LINE_LEN]> {
@@ -118,8 +171,7 @@ impl<'d> Console<'d> {
                     } else if self.n < LINE_LEN - 1 && (32..127).contains(&b) {
                         self.line[self.n] = b;
                         self.n += 1;
-                        let s = [b];
-                        let _ = self.usb.write(&s);
+                        self.queue(&[b]);
                     }
                 }
                 Err(_) => return None,
@@ -176,15 +228,19 @@ pub fn print_list(c: &mut Console<'_>) {
     });
 }
 
-pub struct Writer<'a> {
-    pub buf: &'a mut [u8; 64],
+/// Formatting target for a fixed-size line buffer. The three sizes this used to
+/// come in differed only in the constant, and one of them truncated `status` at
+/// 96 bytes without saying so - so the limit is a parameter now, and a line that
+/// does not fit is a compile-time-visible choice rather than an accident.
+pub struct BufWriter<'a, const N: usize> {
+    pub buf: &'a mut [u8; N],
     pub pos: usize,
 }
 
-impl core::fmt::Write for Writer<'_> {
+impl<const N: usize> core::fmt::Write for BufWriter<'_, N> {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         for &c in s.as_bytes() {
-            if self.pos < 64 {
+            if self.pos < N {
                 self.buf[self.pos] = c;
                 self.pos += 1;
             }
@@ -192,6 +248,11 @@ impl core::fmt::Write for Writer<'_> {
         Ok(())
     }
 }
+
+pub type Writer<'a> = BufWriter<'a, 64>;
+pub type Writer80<'a> = BufWriter<'a, 80>;
+pub type Writer96<'a> = BufWriter<'a, 96>;
+pub type Writer144<'a> = BufWriter<'a, 144>;
 
 pub fn format_slot<'a>(b: &'a mut [u8; 96], i: usize, sl: &Slot) -> &'a str {
     use core::fmt::Write;
@@ -347,7 +408,7 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
             c.outln("  dir <slot> <in|out|auto>  send a direction command");
             c.outln("  power <slot> <on|off>");
             c.outln("  raw <hex>            transmit a raw 24-bit code");
-            c.outln("  status               uptime, counters, mode, frequency");
+            c.outln("  status               uptime, tx queue, counters, mode, frequency");
             c.outln("  report               queue a full state report (check the reporting path)");
             c.outln("  stat                 chip state + RSSI");
             c.outln("  debug [on|off]       noisy diagnostics (no argument: show state)");
@@ -549,16 +610,16 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
             }
         }
         "status" => {
-            let mut b = [0u8; 96];
+            let mut b = [0u8; 144];
             let pos = {
-                let mut w = Writer96 {
+                let mut w = Writer144 {
                     buf: &mut b,
                     pos: 0,
                 };
                 let _ = core::fmt::Write::write_fmt(
                     &mut w,
                     format_args!(
-                        "up {}s | tx {} | rx {} | rearm {} | rep {}/{} | {} | {} kHz | debug {} | pairing {}",
+                        "up {}s | tx {} | rx {} | rearm {} | rep {}/{} | {} | {} kHz | debug {} | pairing {} | out {}",
                         UPTIME_MS.load(Ordering::Relaxed) / 1000,
                         TX_COUNT.load(Ordering::Relaxed),
                         RX_COUNT.load(Ordering::Relaxed),
@@ -581,6 +642,7 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
                         } else {
                             "off"
                         },
+                        c.out_lost(),
                     ),
                 );
                 w.pos
@@ -922,36 +984,4 @@ pub fn fmt2(b: &mut [u8; 80], a: u32, x: u32) -> &str {
     let _ = write!(w, "paired remote 0x{a:05X} into slot {x}");
     let n = w.pos;
     core::str::from_utf8(&b[..n]).unwrap_or("")
-}
-
-pub struct Writer96<'a> {
-    pub buf: &'a mut [u8; 96],
-    pub pos: usize,
-}
-impl core::fmt::Write for Writer96<'_> {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        for &c in s.as_bytes() {
-            if self.pos < 96 {
-                self.buf[self.pos] = c;
-                self.pos += 1;
-            }
-        }
-        Ok(())
-    }
-}
-
-pub struct Writer80<'a> {
-    pub buf: &'a mut [u8; 80],
-    pub pos: usize,
-}
-impl core::fmt::Write for Writer80<'_> {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        for &c in s.as_bytes() {
-            if self.pos < 80 {
-                self.buf[self.pos] = c;
-                self.pos += 1;
-            }
-        }
-        Ok(())
-    }
 }

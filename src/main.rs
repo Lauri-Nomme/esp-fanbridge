@@ -206,6 +206,7 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
     loop {
         // ---- hand buffered log lines to the console (drops when nobody reads)
         logring::drain(|bytes| console.out_bytes(bytes));
+        console.flush();
 
         // ---- retire the panic record once the scheduler is up
         if panic_reported {
@@ -217,6 +218,8 @@ async fn main(spawner: embassy_executor::Spawner) -> ! {
         if let Some(line) = console.poll() {
             let s = cmd_str(&line);
             handle_command(&mut console, s);
+            // answer on the same iteration, so a `status` is not delayed
+            console.flush();
         }
 
         let now_ms = t0.elapsed().as_millis();
