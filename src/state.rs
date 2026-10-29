@@ -79,8 +79,108 @@ pub static STATE: CsMutex<CriticalSectionRawMutex, RefCell<State>> =
         stage_until_ms: 0,
     }));
 
-/// Pending transmit request: 24-bit code, 0 = none.
-pub static TX_REQ: AtomicU32 = AtomicU32::new(0);
+/// Depth of the transmit queue. One code holds the air for ~400 ms (8 repeats),
+/// so this covers about three seconds of backlog: a scene that sets three fans
+/// is six commands, and even a remote-learning burst fits twice over.
+pub const TX_QUEUE_LEN: usize = 8;
+
+/// Codes waiting for the radio, in the order their commands arrived.
+///
+/// This used to be a single slot, and that made it a silent command dropper:
+/// `apply()` stores the code and answers the ZCL write immediately, while
+/// `send_code()` holds the main loop (and therefore the slot) for ~400 ms.
+/// Anything that arrived during those 400 ms overwrote the pending code, so the
+/// fan never heard the command - while the write response, the attribute report
+/// and Home Assistant all said it had worked.
+///
+/// A queue keeps the order (speed then direction for the same fan) and makes
+/// overflow countable. It drops the *oldest* code when full: every command here
+/// is absolute - a speed, a direction, a power state - so the newest one is the
+/// better description of what is wanted now, and skipping an older one cannot
+/// invert anything.
+pub struct TxQueue {
+    codes: [u32; TX_QUEUE_LEN],
+    head: usize,
+    len: usize,
+    dropped: u32,
+}
+
+impl TxQueue {
+    const fn new() -> Self {
+        Self {
+            codes: [0; TX_QUEUE_LEN],
+            head: 0,
+            len: 0,
+            dropped: 0,
+        }
+    }
+
+    fn push(&mut self, code: u32) {
+        if self.len == TX_QUEUE_LEN {
+            self.head = (self.head + 1) % TX_QUEUE_LEN;
+            self.len -= 1;
+            self.dropped = self.dropped.saturating_add(1);
+        }
+        self.codes[(self.head + self.len) % TX_QUEUE_LEN] = code;
+        self.len += 1;
+    }
+
+    fn pop(&mut self) -> Option<u32> {
+        if self.len == 0 {
+            return None;
+        }
+        let code = self.codes[self.head];
+        self.head = (self.head + 1) % TX_QUEUE_LEN;
+        self.len -= 1;
+        Some(code)
+    }
+}
+
+static TX_QUEUE: CsMutex<CriticalSectionRawMutex, RefCell<TxQueue>> =
+    CsMutex::new(RefCell::new(TxQueue::new()));
+
+/// Mirrors of `len` and `dropped`, kept in step inside the critical section.
+///
+/// The main loop polls the radio edges in a tight loop, so it must not take a
+/// lock on every iteration: it reads these instead and only enters the critical
+/// section when something is actually waiting. A stale zero costs one extra
+/// iteration (~microseconds) before the code is taken.
+static TX_QUEUED: AtomicU32 = AtomicU32::new(0);
+static TX_LOST: AtomicU32 = AtomicU32::new(0);
+
+/// Queue a code for the radio. Called from the console and from the Zigbee
+/// cluster handlers (which run inside the stack task), drained by the main loop.
+pub fn tx_push(code: u32) {
+    TX_QUEUE.lock(|q| {
+        let mut q = q.borrow_mut();
+        q.push(code);
+        TX_QUEUED.store(q.len as u32, Ordering::Relaxed);
+        TX_LOST.store(q.dropped, Ordering::Relaxed);
+    });
+}
+
+/// Take the next code, if any. The main loop sends one per iteration.
+pub fn tx_pop() -> Option<u32> {
+    if TX_QUEUED.load(Ordering::Relaxed) == 0 {
+        return None;
+    }
+    TX_QUEUE.lock(|q| {
+        let mut q = q.borrow_mut();
+        let code = q.pop();
+        TX_QUEUED.store(q.len as u32, Ordering::Relaxed);
+        code
+    })
+}
+
+/// Codes still waiting; 0 when the radio has caught up with the commands.
+pub fn tx_pending() -> usize {
+    TX_QUEUED.load(Ordering::Relaxed) as usize
+}
+
+/// Codes thrown away because the queue was full (a bug, not a mode).
+pub fn tx_dropped() -> u32 {
+    TX_LOST.load(Ordering::Relaxed)
+}
 /// Debug requests handled by the main loop (which owns the SPI + segments).
 pub static DUMP_REQ: AtomicBool = AtomicBool::new(false);
 pub static STAT_REQ: AtomicBool = AtomicBool::new(false);
@@ -137,6 +237,9 @@ pub static EXPOSED_NOW: AtomicU32 = AtomicU32::new(0);
 pub static REARMS_NOW: AtomicU32 = AtomicU32::new(0);
 /// Counters for the `status` command.
 pub static TX_COUNT: AtomicU32 = AtomicU32::new(0);
+/// Dropped-command count last printed on the console (so a full queue is
+/// announced once, when it happens, instead of silently losing commands).
+pub static TX_DROPPED_NOW: AtomicU32 = AtomicU32::new(0);
 /// Ignore received 433 MHz frames until this uptime: our own transmission is
 /// metres away from our own antenna, so the receiver hears it and the decoder
 /// can turn it into a *different* button (one bit of the envelope is enough),
