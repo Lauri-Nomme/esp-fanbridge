@@ -228,6 +228,22 @@ seconds later - the parent was queueing for a sleepy child, because the device
 had only ever *resumed* since it gained `rxOnWhenIdle`. After `rejoin`, writes
 were answered one-for-one in under a second.
 
+### 53. Console lines longer than the FIFO were cut in half — **fixed**
+
+Writing straight into the 64-byte USB FIFO meant the tail of every longer line was
+dropped - and the drop happened mid-line. `status` stopped after `| async`, so the
+frequency, the debug flag and the pairing flag were never visible on a device that
+had been up for a while; a `slots` dump lost whole entries and glued the remaining
+ones together. It read like corruption rather than truncation, which is why it was
+mistaken for a dying USB link more than once.
+
+Output is now staged in a 192-byte ring and pushed by `flush()` as the FIFO
+drains - once per main-loop iteration, and once per line inside `outln` - so a
+line is whole whenever the host reads at all, and nothing blocks when it does not.
+Bytes are only lost when the host stops reading entirely; `status` counts those
+chunks (`out N`). `line` and `status` buffers are sized per line with one
+const-generic writer instead of three copy-pasted ones, and `status` now fits.
+
 ### 52. The stack's own log path could wedge it too — **fixed**
 
 Fixing the console (#51) left `log` alone: the stack logs through the `log` crate
