@@ -228,6 +228,38 @@ seconds later - the parent was queueing for a sleepy child, because the device
 had only ever *resumed* since it gained `rxOnWhenIdle`. After `rejoin`, writes
 were answered one-for-one in under a second.
 
+### 54. Commands were dropped between the ZCL reply and the air — **fixed**
+
+Symptom: the noon schedule set three fans to 100% with directions in/out/in. The
+fans started, but `br` was turning the wrong way and `lr-l` was still at its old
+speed. Home Assistant showed all six values applied - and so did the device.
+
+Cause: the transmit request was a **single 32-bit slot** (`TX_REQ`). `apply()`
+stores the code and the ZCL write is answered immediately, while the main loop
+then holds the slot for ~400 ms while one code goes out (8 repeats). Every command
+that arrived during those 400 ms overwrote the pending one and was never
+transmitted, with no error anywhere: the write response, the attribute report and
+Home Assistant all described the device's bookkeeping, not the fan.
+
+Reproduced on hardware: six writes 30 ms apart - the schedule's burst - produced
+**two** transmissions. `debug on` showed four `zb: slot ...` lines with no `tx`
+line after them.
+
+Fix: `TxQueue`, an eight-entry FIFO (about three seconds of air) drained in order
+by the main loop, so speed-then-direction for the same fan stays in order. On
+overflow the oldest code goes and the loss is counted: one console line when it
+happens, and `txq <waiting>/<dropped>` in `status`. Absolute commands make
+dropping the oldest safe - the newest is the better description of what is wanted.
+
+Verified on hardware: the six-write burst now produces six transmissions in order
+(`0x191D07`, `0x191D08`, `0x068007`, `0x068004`, `0x1A5F07`, `0x1A5F08`); a
+twelve-write burst produces nine transmissions plus `tx queue full: 3 command(s)
+dropped` and `txq 0/3`.
+
+This is also why the converter's read-back could not catch it: it reads the
+*device's* attribute, which `apply()` has already updated, so it confirms the
+bookkeeping rather than the fan.
+
 ### 53. Console lines longer than the FIFO were cut in half — **fixed**
 
 Writing straight into the 64-byte USB FIFO meant the tail of every longer line was

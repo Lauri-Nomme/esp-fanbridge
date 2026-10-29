@@ -491,9 +491,9 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
                         code_for(&snap.slots[a], btn)
                     });
                     if code != 0 {
-                        TX_REQ.store(code | 0x8000_0000, Ordering::Relaxed);
+                        tx_push(code);
                         mark_fan_mode(a);
-                        c.outln("sent");
+                        c.outln("queued");
                     } else {
                         c.outln("slot is empty");
                     }
@@ -528,9 +528,9 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
                         code_for(&snap.slots[a], dir_button(dir).unwrap())
                     });
                     if code != 0 {
-                        TX_REQ.store(code | 0x8000_0000, Ordering::Relaxed);
+                        tx_push(code);
                         mark_direction(a);
-                        c.outln("sent");
+                        c.outln("queued");
                     } else {
                         c.outln("slot is empty");
                     }
@@ -571,9 +571,9 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
                     code_for(&snap.slots[a], btn)
                 });
                 if code != 0 {
-                    TX_REQ.store(code | 0x8000_0000, Ordering::Relaxed);
+                    tx_push(code);
                     mark_fan_mode(a);
-                    c.outln("sent");
+                    c.outln("queued");
                 } else {
                     c.outln("slot is empty or already in that state");
                 }
@@ -583,8 +583,8 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
             if let Some(h) = it.next() {
                 let h = h.trim_start_matches("0x");
                 if let Ok(v) = u32::from_str_radix(h, 16) {
-                    TX_REQ.store((v & 0x00FF_FFFF) | 0x8000_0000, Ordering::Relaxed);
-                    c.outln("sent raw");
+                    tx_push(v & 0x00FF_FFFF);
+                    c.outln("queued raw");
                 }
             }
         }
@@ -619,9 +619,11 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
                 let _ = core::fmt::Write::write_fmt(
                     &mut w,
                     format_args!(
-                        "up {}s | tx {} | rx {} | rearm {} | rep {}/{} | {} | {} kHz | debug {} | pairing {} | out {}",
+                        "up {}s | tx {} | txq {}/{} | rx {} | rearm {} | rep {}/{} | {} | {} kHz | debug {} | pairing {} | out {}",
                         UPTIME_MS.load(Ordering::Relaxed) / 1000,
                         TX_COUNT.load(Ordering::Relaxed),
+                        tx_pending(),
+                        tx_dropped(),
                         RX_COUNT.load(Ordering::Relaxed),
                         REARM_COUNT.load(Ordering::Relaxed),
                         REPORT_OK.load(Ordering::Relaxed),
