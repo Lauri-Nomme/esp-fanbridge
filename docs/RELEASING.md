@@ -23,6 +23,13 @@ git tag -a v0.2.0 -m "v0.2.0"
 git push origin v0.2.0
 ```
 
+The version bump must touch **both** `Cargo.toml` and `Cargo.lock`. If only
+`Cargo.toml` changes, `cargo build` rewrites the lock file, the tree is dirty
+when `build.rs` asks git for a describe, and the released binary introduces
+itself as `0.3.1+v0.3.1-dirty` - harmless, but it makes a release look like it
+was built from a working copy. v0.3.1 shipped like that; v0.3.2 and later should
+not.
+
 The workflow publishes a boilerplate body (what the files are and how to flash
 them). Replace it with the release's own notes once the run is green, otherwise
 the releases all read the same:
