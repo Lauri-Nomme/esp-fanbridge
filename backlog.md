@@ -557,11 +557,14 @@ z2m:     direction_2: out
 
 No Zigbee write involved - the updates came only from the device's reports.
 
-### 14. Publish the full state after (re)join — **S**
+### 14. Publish the full state after (re)join — **done**
 
-After a reboot or re-interview the coordinator only knows defaults. Send one
-report with every attribute once joined (reuse #13's machinery), so HA and Z2M
-resync without waiting for a change.
+After a reboot or re-interview the coordinator only knows defaults. `mark_all_state()`
+is now called once the stack reports it is on a network (`announce_task`, right
+before the three announcements) and from the console after anything that changes
+the stored state, so HA and Zigbee2MQTT resync from one flush instead of waiting
+for the next change. Visible in the logs as a burst of `attributeReport` lines
+right after `resuming on network`.
 
 ## RF / OOK tuning
 
@@ -668,22 +671,31 @@ queueing frames for a polling child. Commands then sat in its indirect queue
 until they expired. Delivery latency went from sub-second to 3-40 s with
 `MAC_TRANSACTION_EXPIRED` bursts. Polling at 100 ms is what this parent wants.
 
-### 26. Expose the watchdog counters — **S**
+### 26. Expose the watchdog counters — **done**
 
-`rxRearmCount` (how often the radio had to be re-armed, see #6 in round 1) as a
-diagnostic attribute — a device that needs re-arming often is telling us
-something.
+`rxRearmCount` (0x0004 on `espPairing`) counts how often the receiver watchdog had
+to re-arm the radio; it is carried by the pairing report next to `txDropped`
+(#55) and shows up in Home Assistant as `sensor.fanbridge_rx_rearm_count`.
+
+Reading it next to `txDropped` is the useful part: `rx_rearm_count` climbing
+means the *receiver* is being disturbed (noise, or our own transmissions), while
+`tx_dropped` climbing means the transmit queue overflowed. Both are diagnostic
+sensors, and both should sit still.
 
 ## Firmware structure / tooling
 
-### 27. Split the protocol logic into a testable library — **M**
+### 27. Split the protocol logic into a testable library — **done**
 
-`expand_code`, `decode_frame`, the config serialisation/migration and the
-speed↔mode mappings are pure functions with **no tests**, because the crate
-depends on esp-hal and cannot run on the host. Moving them into a `no_std` lib
-crate (no esp dependencies) allows `cargo test` on the workstation and protects
-the config migration and the 49-byte expansion, which are exactly the parts that
-broke unnoticed.
+`protocol/` is a `no_std` library with no esp dependencies: `decode_frame`,
+`expand_code`, the symbol table and the 512-byte config image (with its checksum
+and migration). `protocol/run-tests.sh` runs it on the host from a scratch
+directory, because `.cargo/config.toml` walks up from the tree and would otherwise
+force the ESP target on a host build.
+
+CI's `protocol tests` job runs the same script with `LINT=1`, so formatting,
+clippy and the tests all cover the parts that have actually broken in the field:
+the 49-byte expansion (round-trips through the decoder in the tests) and the
+config image.
 
 ### 28. CI: build + clippy + fmt — **done**
 
