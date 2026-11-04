@@ -276,10 +276,17 @@ The same fan is the only one that rejects the packet engine (#5), which makes
 "marginal receiver" the working theory rather than a coincidence.
 
 **Experiment (2026-11-04):** `REPEATS` 8 -> 16, twice the frames per burst for
-~400 ms more air, nothing else changed. Two of the three fans never needed more
-than 8, so this also tests whether extra frames help a decoder sitting on the
-edge of its window. Change it back or tune per fan without a reflash with
-`repeats <n>`; the next scheduled runs are the measurement.
+~400 ms more air per command, nothing else changed. Two of the three fans never
+needed more than 8, so this also tests whether extra frames help a decoder
+sitting on the edge of its window. Change it back or tune per fan without a
+reflash with `repeats <n>`.
+
+First data point, same evening: `lr-r` 25 % -> 100 % -> 25 %, seven seconds apart,
+both changes audible and obeyed. So the longer burst (~800 ms, 16 frames) is not
+rejected by that receiver - the question that remains is whether it lands
+*every* time, which only the scheduled blocks over the next few days can answer.
+The two known failures were single 8-frame bursts sent as part of a three-command
+block, so the comparison is like for like.
 
 ### 59. An occasional burst is simply not obeyed — **open, measured**
 
