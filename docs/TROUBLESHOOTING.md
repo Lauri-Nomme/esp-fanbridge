@@ -111,8 +111,8 @@ The device says `sent` and the fan does nothing. In order of likelihood:
    if that is the silent one: `txmode <slot> async` (or `txmode async` for all).
    An override lasts until the next boot.
 4. **Repeats and gap.** `repeats` shows frames per command and the gap between
-   them; a receiver needs a couple of frames to wake up. 8 frames / 12 ms is the
-   default and what the remotes do.
+   them; a receiver needs a couple of frames to wake up. 16 frames / 12 ms is the
+   default since backlog #60 (8 before that); the remotes themselves send 4-5.
 5. **Antenna and range.** A fan across the flat is fine with a proper 433 MHz
    antenna; with a 5 cm wire it is not.
 6. **Battery in the remote** - if the *original* remote still works and the
