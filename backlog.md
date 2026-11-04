@@ -261,6 +261,26 @@ ring exists, and the whole banner is ~200 bytes - less than the FIFO plus the
 USB endpoint buffers, which is why a reset with a host attached but never reading
 still boots and answers (measured: 843 ms for a ZCL read).
 
+### 60. `lr-r` misses whole bursts — **experiment running (repeats 16)**
+
+Two scheduled commands were never obeyed by `lr-r` while every other fan obeyed
+everything:
+
+* 2026-10-30 01:28 - `speed 4`, async: transmitted, device updated, fan unmoved.
+  Three re-sends 5 s apart and it moved.
+* 2026-11-04 20:00 - the evening block's `speed 1`: device reported 25 %,
+  `tx_dropped` 0, self-check `-> OK`, and the fan stayed at 100 % until three
+  re-sends 4 s apart.
+
+The same fan is the only one that rejects the packet engine (#5), which makes
+"marginal receiver" the working theory rather than a coincidence.
+
+**Experiment (2026-11-04):** `REPEATS` 8 -> 16, twice the frames per burst for
+~400 ms more air, nothing else changed. Two of the three fans never needed more
+than 8, so this also tests whether extra frames help a decoder sitting on the
+edge of its window. Change it back or tune per fan without a reflash with
+`repeats <n>`; the next scheduled runs are the measurement.
+
 ### 59. An occasional burst is simply not obeyed — **open, measured**
 
 On 2026-10-30 a single async `speed 4` command to `lr-r` was transmitted

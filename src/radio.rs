@@ -67,7 +67,15 @@ pub const FREQ_KHZ: u32 = 433_920;
 pub const T_SHORT: u32 = 400;
 pub const T_LONG: u32 = 1200;
 pub const FRAME_GAP_MS: u32 = 12;
-pub const REPEATS: u32 = 8;
+/// Frames per command.
+///
+/// 8 was enough for two of the three fans; `lr-r`'s receiver misses a whole
+/// burst now and then (backlog #60), which is invisible to the firmware: the
+/// queue delivers, the frames go out, and only the airflow disagrees. Doubling
+/// the frames doubles the chances of that decoder locking on, at the cost of
+/// ~400 ms more air per command. It is a test, not a conclusion - the runtime
+/// `repeats` command changes it without a reflash.
+pub const REPEATS: u32 = 16;
 
 const CC1101_CONFIG: &[(u8, u8)] = &[
     (IOCFG2, 0x0D),
