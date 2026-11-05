@@ -245,3 +245,30 @@ espflash flash --port /dev/ttyACM0 esp-fanbridge-<version>.elf
 No light at all: `identify 5` should blink regardless of Zigbee, which separates
 "LED broken" from "state machine quiet". The LED is on `IO15` and is driven by
 the same task as the console, so a hung console loop means no LED either.
+
+## 11. Everything goes unavailable for about 40 seconds, repeatedly
+
+Every entity of every device - the fans, the coordinator's children, even the
+battery sensors - turning `unavailable` and back at the same second is not a
+Zigbee problem and not this device. It is Home Assistant itself being rolled:
+the pod restarts, the MQTT integration reconnects, and every MQTT entity has no
+state for the ~40 seconds the container needs to come up.
+
+Tell the two apart by timestamps, not by feel:
+
+```sh
+kubectl -n home-iot get rs -l app=homeassistant \
+  -o custom-columns=NAME:.metadata.name,CREATED:.metadata.creationTimestamp | sort -k2 | tail
+kubectl -n home-iot get deploy homeassistant \
+  -o jsonpath='{.spec.template.metadata.annotations}{"\n"}'
+```
+
+Each `homeassistant-<hash>` ReplicaSet is one roll, and
+`kubectl.kubernetes.io/restartedAt` says when the last `kubectl rollout restart`
+happened. Seen on 2026-11-05: six rolls in 100 minutes. If a fan stops answering
+at the same moment, look at these before touching the bridge - the device's own
+`up` counter is the tie-breaker (it did not reboot).
+
+A roll that lands exactly on 12:00, 20:00 or 00:00 can also make a scheduled
+block run against `unavailable` entities, which is worth knowing when a fan
+"ignored" a schedule on a day when HA was being restarted.
