@@ -288,6 +288,23 @@ rejected by that receiver - the question that remains is whether it lands
 The two known failures were single 8-frame bursts sent as part of a three-command
 block, so the comparison is like for like.
 
+**Result, 2026-11-06 - four blocks, no misses.** Every scheduled block since the
+change ran and was obeyed, including the exact command that had failed:
+
+| block | commands | self-check |
+|---|---|---|
+| 2026-11-04 22:00Z night | 3 (incl. `br` power-off) | OK |
+| 2026-11-05 10:00Z noon | 6 (3 directions + 3 speeds) | OK |
+| 2026-11-05 18:00Z evening | 2 - the `lr-r` 100 -> 25 that failed on Nov 4 | OK |
+| 2026-11-05 22:00Z night | 3 (incl. `br` power-off) | OK |
+
+14 commands, `tx_dropped` 0 throughout, no ntfy alert, and the room was quiet when
+the owner came home. Confidence is *not* the same as proof yet: at 8 frames the
+rate was roughly two misses in forty-odd commands (~4 %), and 0 in 14 happens
+about 56 % of the time by luck alone at that rate. The experiment stays open for
+another week; if it holds, 16 becomes the documented default rather than a test,
+and per-fan tuning (#18) stays unnecessary.
+
 ### 59. An occasional burst is simply not obeyed — **open, measured**
 
 On 2026-10-30 a single async `speed 4` command to `lr-r` was transmitted
