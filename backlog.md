@@ -293,7 +293,7 @@ An automation-level alternative (speeds first, directions 2 s later) was
 considered and not needed: the device now copes with either order, which also
 covers a manual `select` while a fan is off.
 
-### 60. `lr-r` misses whole bursts — **experiment running (repeats 16)**
+### 60. `lr-r` misses whole bursts — **fixed (repeats 16)**
 
 Two scheduled commands were never obeyed by `lr-r` while every other fan obeyed
 everything:
@@ -352,7 +352,9 @@ took three weeks to call rather than one block.
 Cost: ~400 ms more air per command. A noon block is six commands, the queue holds
 8, and `txq` has been 0/0 for three weeks.
 
-### 59. An occasional burst is simply not obeyed — **open, measured**
+### 59. An occasional burst is simply not obeyed — **superseded by #60**
+
+*Resolution:* #60 found the cause (frames per burst) and fixed it. The entry stays because its point still holds: `tx_dropped = 0` proves the queue delivered, never that the fan obeyed.
 
 On 2026-10-30 a single async `speed 4` command to `lr-r` was transmitted
 (`tx 0x191D07`, device state updated, `tx_dropped` 0) and the fan did not move.
@@ -602,11 +604,20 @@ Side observations worth keeping:
   by the keepalive poll is discarded. Rare with polling as the main path, but it
   is a lost command when it happens.
 
-### 45. Router role instead of end device — **M, now the most promising fix**
+### 45. Router role instead of end device — **blocked on the stack, not a switch**
 
 A router is addressed directly: no indirect queue, no poll, and `rxOnWhenIdle` is
 part of what a router *is*, so neither of the two problems in #46 applies. This
 device is mains powered, so it is entitled to be one.
+
+**The stack cannot do it yet (checked 2026-11-01).** `zigbee-core`'s
+`start_router()` is `todo!()` and has no call site, `NLME-ED-SCAN` is the same,
+incoming `RouteRequest`s are logged as "ignored", and there is no routing table -
+only the frame codecs for route request/reply. Setting
+`logical_type: LogicalType::Router` today would advertise a router that cannot
+relay a single frame, accept children and break them, which is worse than an end
+device. Doing it properly is a project: start-router, child table, routing table,
+route discovery, forwarding, link costs.
 
 Costs: it would relay for others (a role change in the household mesh), and the
 stack has to support router duties properly — worth watching whether other
@@ -721,7 +732,9 @@ is ~24 dB stronger at 0.3 m). With an attenuator or a fixed distance, compare ou
 carrier frequency against a remote's; if there is a systematic offset, adjust the
 frequency word (or model the crystal tolerance) instead of assuming 26 MHz.
 
-### 18. Per-fan transmit profile — **M**
+### 18. Per-fan transmit profile — **not needed**
+
+*Resolution (2026-11-25):* not needed. Frame count was the problem and 16 frames fixed it (#60); the packet engine is only useful per receiver (`lr-r` rejects it, `lr-l` accepts it) and nothing measured makes it better than the proven path.
 
 `lr-r` ignores packet mode while `lr-l` accepts it. Store per-slot transmit
 parameters (mode, repeats, gap, PA level) so a picky receiver can be tuned
@@ -743,7 +756,9 @@ The endpoint set is fixed at boot, so a new remote needs `reboot` + re-interview
 Restarting automatically after `Paired` (with a console message) removes the most
 confusing step in the whole flow. `restart_required` already exists as a signal.
 
-### 20. Pairing session timeout is dead code — **S**
+### 20. Pairing session timeout is dead code — **done**
+
+*Resolution:* done - `PAIR_SESSION_MS` is used; a session that learns nothing reports `failed` and logs `pairing timed out (nothing learned)`, so Home Assistant no longer sits on *waiting forever*.
 
 `PAIR_SESSION_MS` is defined and never used (compiler warning). Implement the
 90 s session limit and report `failed` (stage 6) when it expires, so HA shows a
@@ -769,7 +784,9 @@ so `0x00` is the closest true statement. `on` is still accepted.
 Verified end to end: a temporary read from Zigbee2MQTT after a device announce
 returned `fanModeSequence=0` (the read is not part of the shipped converter).
 
-### 24. Make Identify blink the LED — **S**
+### 24. Make Identify blink the LED — **done**
+
+*Resolution:* done - the LED pattern consults `IDENTIFY.is_identifying()`, so the coordinator's identify blinks it for the requested duration.
 
 The Identify cluster is served, but the LED ignores it, so Z2M's "identify"
 button does nothing visible. Blink for `identify_time` seconds.
@@ -862,12 +879,16 @@ it on the next boot would explain spontaneous reboots.
 
 ## Console / UX
 
-### 31. `status` command — **S**
+### 31. `status` command — **done**
+
+*Resolution:* `status` exists and is still the first thing to ask a device: uptime, tx, txq (queue waiting/dropped), rx, rearm, rep ok/fail, mode, frequency, debug, pairing, out.
 
 Uptime, transmit count, received-frame count, watchdog re-arms, current mode and
 frequency in one line — the first thing to ask a device when debugging.
 
-### 32. Per-slot overrides from the console — **S**
+### 32. Per-slot overrides from the console — **not needed**
+
+*Resolution:* dropped with #18 - it existed to tune per-fan parameters that turned out not to be needed. `txmode <slot>` (#58) covers the one per-slot knob that was.
 
 `set <slot> repeats 12`, `set <slot> gap 200`, `set <slot> power 0x60`: expose
 what #18 stores without a reflash.
