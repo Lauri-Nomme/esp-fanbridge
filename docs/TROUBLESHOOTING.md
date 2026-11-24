@@ -272,3 +272,8 @@ at the same moment, look at these before touching the bridge - the device's own
 A roll that lands exactly on 12:00, 20:00 or 00:00 can also make a scheduled
 block run against `unavailable` entities, which is worth knowing when a fan
 "ignored" a schedule on a day when HA was being restarted.
+
+A container that was killed rather than rolled looks the same from the outside.
+`kubectl get pods -l app=homeassistant -o jsonpath='{.items[0].status.containerStatuses[0].lastState}'`
+tells them apart: `OOMKilled` means it hit the 1 GiB limit (seen once on
+2026-11-24), `Completed`/empty means a planned restart.

@@ -299,11 +299,26 @@ change ran and was obeyed, including the exact command that had failed:
 | 2026-11-05 22:00Z night | 3 (incl. `br` power-off) | OK |
 
 14 commands, `tx_dropped` 0 throughout, no ntfy alert, and the room was quiet when
-the owner came home. Confidence is *not* the same as proof yet: at 8 frames the
-rate was roughly two misses in forty-odd commands (~4 %), and 0 in 14 happens
-about 56 % of the time by luck alone at that rate. The experiment stays open for
-another week; if it holds, 16 becomes the documented default rather than a test,
-and per-fan tuning (#18) stays unnecessary.
+the owner came home.
+
+**Conclusion, 2026-11-25 - three weeks, no misses.** The device has now sent 183
+bursts over 20 days of uptime (`tx 183`, `txq 0/0`, `rep 418/7`, the 7 being the
+boot race), i.e. roughly 160 scheduled commands, and:
+
+* 25 of 25 self-checks in the retained window passed, no ntfy alert;
+* the fans followed the schedule every weekday (`lr-r` 100 -> 25 -> 50, `br` on at
+  noon, off at night) according to their state history;
+* no miss was noticed by the person living with the fans.
+
+At the 8-frame rate (2 misses in ~45 commands, ~4 %) zero misses in ~160 commands
+has a probability below 0.2 %, so frame count was the variable. **16 stays as the
+default and per-fan tuning (#18) is not needed.** The honest limit: the
+self-check can only see what the device reports, so the device-side evidence is
+exact and the fan-side obedience is the owner's observation - which is why this
+took three weeks to call rather than one block.
+
+Cost: ~400 ms more air per command. A noon block is six commands, the queue holds
+8, and `txq` has been 0/0 for three weeks.
 
 ### 59. An occasional burst is simply not obeyed — **open, measured**
 
