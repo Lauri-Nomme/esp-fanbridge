@@ -69,12 +69,12 @@ pub const T_LONG: u32 = 1200;
 pub const FRAME_GAP_MS: u32 = 12;
 /// Frames per command.
 ///
-/// 8 was enough for two of the three fans; `lr-r`'s receiver misses a whole
-/// burst now and then (backlog #60), which is invisible to the firmware: the
-/// queue delivers, the frames go out, and only the airflow disagrees. Doubling
-/// the frames doubles the chances of that decoder locking on, at the cost of
-/// ~400 ms more air per command. It is a test, not a conclusion - the runtime
-/// `repeats` command changes it without a reflash.
+/// 8 was enough for two of the three fans; `lr-r`'s receiver occasionally missed a
+/// whole burst (backlog #60), which is invisible to the firmware: the queue
+/// delivers, the frames go out, and only the airflow disagrees. 16 frames fixed
+/// it - roughly 160 scheduled commands over three weeks with no miss - at the
+/// cost of ~400 ms more air per command. The runtime `repeats` command changes it
+/// without a reflash if a future receiver wants something else.
 pub const REPEATS: u32 = 16;
 
 const CC1101_CONFIG: &[(u8, u8)] = &[
