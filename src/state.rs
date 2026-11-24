@@ -316,6 +316,39 @@ pub fn set_tx_mode_slot(slot: usize, mode: u8) {
     }
 }
 
+/// A direction command arrived for a slot whose fan was off.
+///
+/// A stopped fan ignores it: the frame goes out, the device records the new
+/// direction, and nothing happens on the wire until the motor runs - which is how
+/// `br` ended up blowing "out" while Home Assistant said "in" every noon (the
+/// schedule sends directions before the speeds that start the fans). The flag
+/// makes the next power-on re-send the direction, in the same queue so the order
+/// is speed then direction.
+static DIR_PENDING: [AtomicBool; 8] = [const { AtomicBool::new(false) }; 8];
+
+/// Remember that `slot` was given a direction while it was off.
+pub fn set_direction_pending(slot: usize) {
+    if let Some(f) = DIR_PENDING.get(slot) {
+        f.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Whether `slot` has a direction waiting for its next power-on.
+pub fn direction_pending(slot: usize) -> bool {
+    DIR_PENDING
+        .get(slot)
+        .map(|f| f.load(Ordering::Relaxed))
+        .unwrap_or(false)
+}
+
+/// Take (and clear) the pending flag: exactly one power-on re-sends it.
+pub fn take_direction_pending(slot: usize) -> bool {
+    DIR_PENDING
+        .get(slot)
+        .map(|f| f.swap(false, Ordering::Relaxed))
+        .unwrap_or(false)
+}
+
 /// Queue `code` with the global transmit mode (no slot: raw console test codes).
 pub fn tx_push_default(code: u32) {
     tx_push(

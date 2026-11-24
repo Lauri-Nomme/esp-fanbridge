@@ -392,6 +392,18 @@ impl Console<'_> {
     }
 }
 
+/// Re-send the slot's direction after the fan has been started: a direction
+/// command sent to a stopped fan is ignored by the fan, so one that arrived
+/// while it was off is re-asserted here (backlog #61).
+fn reassert_direction(c: &mut Console<'_>, slot: usize) {
+    let dir = STATE.lock(|s| s.borrow().cfg.slots[slot].dir);
+    if let Some(btn) = dir_button(dir) {
+        let code = STATE.lock(|s| code_for(&s.borrow().cfg.slots[slot], btn));
+        tx_push_for(slot, code);
+        c.outln("direction re-sent (it was set while the fan was off)");
+    }
+}
+
 /// Render a per-slot transmit-mode override for `txmode`.
 fn mode_name(slot: usize) -> &'static str {
     match crate::state::TX_MODE_SLOT
@@ -492,6 +504,7 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
                 if let Some(btn) = speed_button(sp) {
                     // keep the stored state in step with what the fan will do,
                     // exactly like the Zigbee write does
+                    let mut reassert_dir = false;
                     let code = STATE.lock(|s| {
                         let mut st = s.borrow_mut();
                         let slot = &mut st.cfg.slots[a];
@@ -500,6 +513,8 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
                         }
                         slot.speed = sp;
                         slot.power = true;
+                        // set while the fan was off? the motor ignored it then
+                        reassert_dir = take_direction_pending(a);
                         let snap = st.cfg;
                         drop(st);
                         save_config(&snap);
@@ -507,6 +522,9 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
                     });
                     if code != 0 {
                         tx_push_for(a, code);
+                        if reassert_dir {
+                            reassert_direction(c, a);
+                        }
                         mark_fan_mode(a);
                         c.outln("queued");
                     } else {
@@ -537,6 +555,10 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
                             return 0;
                         }
                         slot.dir = dir;
+                        if !slot.power {
+                            // stopped fan: re-assert this when it next starts
+                            set_direction_pending(a);
+                        }
                         let snap = st.cfg;
                         drop(st);
                         save_config(&snap);
@@ -587,6 +609,9 @@ pub fn handle_command(c: &mut Console<'_>, line: &str) {
                 });
                 if code != 0 {
                     tx_push_for(a, code);
+                    if wanted && take_direction_pending(a) {
+                        reassert_direction(c, a);
+                    }
                     mark_fan_mode(a);
                     c.outln("queued");
                 } else {

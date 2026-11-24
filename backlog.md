@@ -261,6 +261,38 @@ ring exists, and the whole banner is ~200 bytes - less than the FIFO plus the
 USB endpoint buffers, which is why a reset with a host attached but never reading
 still boots and answers (measured: 843 ms for a ZCL read).
 
+### 61. A direction command sent to a stopped fan did nothing — **fixed**
+
+The noon block sends three direction selects and then three speeds. `br` is off at
+that moment (the night block turned it off), so its "in" arrived at a stopped
+motor, was ignored by the fan, and the speed that followed started it in whatever
+direction it was last left in. Home Assistant and the device both said "in"; the
+airflow said otherwise. It was seen repeatedly and misdiagnosed twice as a lost
+command before the ordering was noticed.
+
+The device now remembers a direction that arrives for a slot whose power is off
+(`DIR_PENDING`) and re-sends it right after the next power-on, through the same
+queue, so the order is speed then direction. Both ways of starting a fan do it:
+the Zigbee write (`FanEp`, `OnOffEp`) and the console commands.
+
+Verified on hardware through the Zigbee path, fan off before the sequence:
+
+```
+zb: slot 2 "br" direction -> out     (fan off)
+tx 0x1A5F04                          (sent now; the stopped fan ignores it)
+zb: slot 2 "br" speed -> 4
+tx 0x1A5F07                          (starts the fan)
+tx 0x1A5F04                          (direction re-sent)
+```
+
+The console path also prints `direction re-sent (it was set while the fan was
+off)`. The flag is RAM only: a reboot clears it, which is right - the fan keeps
+its direction across a bridge reboot.
+
+An automation-level alternative (speeds first, directions 2 s later) was
+considered and not needed: the device now copes with either order, which also
+covers a manual `select` while a fan is off.
+
 ### 60. `lr-r` misses whole bursts — **experiment running (repeats 16)**
 
 Two scheduled commands were never obeyed by `lr-r` while every other fan obeyed
