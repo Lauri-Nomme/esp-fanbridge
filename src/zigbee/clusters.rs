@@ -41,10 +41,13 @@ use crate::pairing::Stage;
 use crate::pairing::*;
 use crate::state::REARM_COUNT;
 use crate::state::STATE;
+use crate::state::direction_pending;
 use crate::state::mark_direction;
 use crate::state::mark_fan_mode;
 use crate::state::mark_pairing_switch;
 use crate::state::request_reboot_in;
+use crate::state::set_direction_pending;
+use crate::state::take_direction_pending;
 use crate::state::tx_dropped;
 use crate::state::tx_push_for;
 use crate::state::zb_event;
@@ -228,6 +231,16 @@ impl<const EP: u8, const SLOT: i8, const KIND: u8> OnOffEp<EP, SLOT, KIND> {
                 if code != 0 {
                     tx_push_for(SLOT.max(0) as usize, code);
                 }
+                if on {
+                    let slot = SLOT.max(0) as usize;
+                    if take_direction_pending(slot) {
+                        let dir = STATE.lock(|s| s.borrow().cfg.slots[slot].dir);
+                        if let Some(btn) = dir_button(dir) {
+                            let c = STATE.lock(|s| code_for(&s.borrow().cfg.slots[slot], btn));
+                            tx_push_for(slot, c);
+                        }
+                    }
+                }
             }
         }
         match KIND {
@@ -340,31 +353,48 @@ impl<const SLOT: usize> ClusterServer for FanEp<SLOT> {
 
 impl<const SLOT: usize> FanEp<SLOT> {
     fn apply(&self, speed: u8) {
-        let code = STATE.lock(|s| {
+        // `dir_code` is the direction to re-assert because it was set while the
+        // fan was off: a stopped motor ignores it, so it goes out again right
+        // after the speed that starts the fan
+        let (code, dir_code) = STATE.lock(|s| {
             let mut st = s.borrow_mut();
             let sl = &mut st.cfg.slots[SLOT];
             if !sl.used() {
-                return 0;
+                return (0, 0);
             }
             if speed == 0 {
                 if !sl.power {
-                    return 0;
+                    return (0, 0);
                 }
                 sl.power = false;
                 let snap = st.cfg;
                 drop(st);
                 save_config(&snap);
-                return code_for(&snap.slots[SLOT], BTN_POWER);
+                return (code_for(&snap.slots[SLOT], BTN_POWER), 0);
             }
             sl.speed = speed;
             sl.power = true;
             let snap = st.cfg;
             drop(st);
             save_config(&snap);
-            code_for(&snap.slots[SLOT], speed_button(speed).unwrap())
+            let dir_code = if direction_pending(SLOT) {
+                code_for(
+                    &snap.slots[SLOT],
+                    dir_button(snap.slots[SLOT].dir).unwrap_or(BTN_DIR_IN),
+                )
+            } else {
+                0
+            };
+            (
+                code_for(&snap.slots[SLOT], speed_button(speed).unwrap()),
+                dir_code,
+            )
         });
         if code != 0 {
             tx_push_for(SLOT, code);
+        }
+        if dir_code != 0 && take_direction_pending(SLOT) {
+            tx_push_for(SLOT, dir_code);
         }
         zb_event(0, SLOT as u8, speed);
         mark_fan_mode(SLOT);
@@ -482,6 +512,10 @@ impl<const SLOT: usize> DirEp<SLOT> {
                 return 0;
             }
             slot.dir = dir.as_u8();
+            if !slot.power {
+                // a stopped fan ignores this; re-send it when the fan starts
+                set_direction_pending(SLOT);
+            }
             let snap = st.cfg;
             drop(st);
             save_config(&snap);
